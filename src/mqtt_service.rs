@@ -4,6 +4,7 @@ use log::{debug, error, info, warn};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::net::lookup_host;
 use tokio::time::{sleep, Duration};
 
 #[derive(Debug)]
@@ -31,7 +32,22 @@ impl MqttService {
 
     pub async fn start(self: Arc<Self>, mqtt_host: &str, mqtt_port: u16, mqtt_client_id: &str) {
         info!("Starting MQTT service...");
+
+        let mut retry_interval = Duration::from_secs(5); // Initial retry interval
+
         loop {
+            debug!("Checking MQTT broker at {}:{} for connectivity", mqtt_host, mqtt_port);
+
+            // Prüfen, ob der Host aufgelöst werden kann
+            if let Err(e) = lookup_host((mqtt_host, mqtt_port)).await {
+                error!(
+                "Failed to resolve MQTT broker address ({}:{}): {}. Retrying in {:?}...",
+                mqtt_host, mqtt_port, e, retry_interval
+            );
+                sleep(retry_interval).await;
+                continue;
+            }
+
             debug!("Configuring broker at {}:{}", mqtt_host, mqtt_port);
 
             let mut mqtt_options = MqttOptions::new(mqtt_client_id, mqtt_host, mqtt_port);
@@ -50,18 +66,26 @@ impl MqttService {
                 *client_state = ClientState::Connecting;
             }
 
-            // Attempt to subscribe to the topic
+            // Versuch, eine Verbindung aufzubauen und zu abonnieren
             match client.subscribe("upload/control", QoS::AtLeastOnce).await {
                 Ok(_) => {
                     info!("Successfully subscribed to topic 'upload/control'.");
-                    let mut client_state = self.client_state.lock().await;
-                    *client_state = ClientState::Connected;
+                    {
+                        let mut client_state = self.client_state.lock().await;
+                        *client_state = ClientState::Connected;
+                    }
+
+                    // Reset retry interval after successful connection
+                    retry_interval = Duration::from_secs(5);
                 }
                 Err(e) => {
                     error!("Subscription failed: {}", e);
-                    let mut client_state = self.client_state.lock().await;
-                    *client_state = ClientState::Error(e.to_string());
-                    sleep(Duration::from_secs(5)).await;
+                    {
+                        let mut client_state = self.client_state.lock().await;
+                        *client_state = ClientState::Error(e.to_string());
+                    }
+                    sleep(retry_interval).await;
+                    retry_interval = (retry_interval * 2).min(Duration::from_secs(60)); // Exponential backoff
                     continue; // Retry connection
                 }
             }
@@ -81,15 +105,18 @@ impl MqttService {
                             let mut client_state = self.client_state.lock().await;
                             *client_state = ClientState::Disconnected;
                         }
-                        sleep(Duration::from_secs(5)).await;
                         break; // Exit inner loop to attempt reconnection
                     }
                 }
             }
 
-            // At this point, the inner loop has exited due to an error
-            // The outer loop will attempt to reconnect
-            warn!("Reconnecting to MQTT broker...");
+            // Erneute Verbindung versuchen
+            warn!(
+            "Lost connection to MQTT broker. Retrying in {:?}...",
+            retry_interval
+        );
+            sleep(retry_interval).await;
+            retry_interval = (retry_interval * 2).min(Duration::from_secs(60)); // Exponential backoff
         }
     }
 

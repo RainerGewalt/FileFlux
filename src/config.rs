@@ -5,10 +5,7 @@ use thiserror::Error;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub instance_id: String,
-    pub container_group: String,
-
-    pub mqtt_address: String,
+    pub mqtt_host: String,
     pub mqtt_port: u16,
     pub mqtt_username: String,
     pub mqtt_password: String,
@@ -54,12 +51,8 @@ impl Config {
         dotenv().ok();
 
         Ok(Self {
-            // Scaling and Identification
-            instance_id: env::var("INSTANCE_ID").map_err(|_| ConfigError::MissingOrInvalid("INSTANCE_ID".to_string()))?,
-            container_group: env::var("CONTAINER_GROUP").unwrap_or_else(|_| "default_group".to_string()),
-
             // MQTT Configuration
-            mqtt_address: env::var("MQTT_ADDRESS").map_err(|_| ConfigError::MissingOrInvalid("MQTT_ADDRESS".to_string()))?,
+            mqtt_host: env::var("MQTT_HOST").map_err(|_| ConfigError::MissingOrInvalid("MQTT_HOST".to_string()))?,
             mqtt_port: env::var("MQTT_PORT")
                 .map_err(|_| ConfigError::MissingOrInvalid("MQTT_PORT".to_string()))?
                 .parse::<u16>()

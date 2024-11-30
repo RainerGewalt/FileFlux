@@ -11,6 +11,7 @@ mod upload;
 use config::Config;
 use mqtt_service::MqttService;
 use progress_tracker::SharedState;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
@@ -35,13 +36,13 @@ async fn main() {
     let mqtt_service = MqttService::new(state.clone());
 
     let mqtt_service_clone = mqtt_service.clone();
-    let mqtt_address = config.mqtt_address.clone();
+    let mqtt_host = config.mqtt_host.clone();
     let mqtt_port = config.mqtt_port;
-    let instance_id = config.instance_id.clone();
-
+    let uuid = Uuid::new_v4();
+    let mqtt_client_id = format!("sftp_worker{}", uuid);
     tokio::spawn(async move {
         mqtt_service_clone
-            .start(&mqtt_address, mqtt_port, &instance_id)
+            .start(&mqtt_host, mqtt_port, &mqtt_client_id)
             .await;
     });
 
