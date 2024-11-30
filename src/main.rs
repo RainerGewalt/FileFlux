@@ -14,30 +14,40 @@ use progress_tracker::SharedState;
 
 #[tokio::main]
 async fn main() {
-    // Logging initialisieren
-    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
 
-    // Konfiguration laden
+    // Load configuration
     let config = match Config::from_env() {
         Ok(cfg) => cfg,
         Err(e) => {
-            error!("Fehler beim Laden der Konfiguration: {:?}", e);
+            error!("Error loading configuration: {:?}", e);
             return;
         }
     };
 
-    // Gemeinsamer Zustand für Fortschrittstracking
+    // Shared state for progress tracking
     let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
 
-    // MQTT-Service starten
-    let mut mqtt_service = MqttService::new(state.clone());
+    // Start MQTT service
+    let mqtt_service = MqttService::new(state.clone());
+
+    let mqtt_service_clone = mqtt_service.clone();
+    let mqtt_address = config.mqtt_address.clone();
+    let mqtt_port = config.mqtt_port;
+    let instance_id = config.instance_id.clone();
+
     tokio::spawn(async move {
-        mqtt_service
-            .start(&config.mqtt_address, config.mqtt_port, &config.instance_id)
+        mqtt_service_clone
+            .start(&mqtt_address, mqtt_port, &instance_id)
             .await;
     });
 
-    // Warten auf Beendigungssignal
-    tokio::signal::ctrl_c().await.unwrap();
-    info!("Beende den Service...");
+    // Wait for termination signal
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        error!("Failed to handle termination signal: {:?}", e);
+    }
+    info!("Service is shutting down...");
 }
