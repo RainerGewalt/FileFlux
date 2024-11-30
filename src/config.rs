@@ -13,10 +13,19 @@ pub struct Config {
     pub mqtt_max_retries: i32,
     pub mqtt_retry_interval_ms: u64,
 
+    // SMB Configuration
     pub smb_target_ip: String,
     pub smb_share_name: String,
     pub smb_target_folder: String,
     pub smb_connection_timeout_ms: u64,
+
+    // SFTP Configuration
+    pub sftp_host: String,
+    pub sftp_port: u16,
+    pub sftp_username: String,
+    pub sftp_password: String,
+    pub sftp_target_folder: String,
+    pub sftp_connection_timeout_ms: u64,
 
     pub default_file_source: String,
     pub recursive_upload: bool,
