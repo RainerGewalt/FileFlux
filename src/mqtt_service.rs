@@ -14,19 +14,24 @@ enum ClientState {
     Connected,
     Error(String),
 }
-
 pub struct MqttService {
     client_state: Mutex<ClientState>,
     client: Mutex<Option<AsyncClient>>,
     state: SharedState,
+    root_topic: String,  // Root topic for MQTT messages
+    username: String,    // MQTT username
+    password: String,    // MQTT password
 }
 
 impl MqttService {
-    pub fn new(state: SharedState) -> Arc<Self> {
+    pub fn new(state: SharedState, root_topic: String, username: String, password: String) -> Arc<Self> {
         Arc::new(Self {
             client_state: Mutex::new(ClientState::Disconnected),
             client: Mutex::new(None),
             state,
+            root_topic,
+            username,
+            password,
         })
     }
 
@@ -36,23 +41,12 @@ impl MqttService {
         let mut retry_interval = Duration::from_secs(5); // Initial retry interval
 
         loop {
-            debug!("Checking MQTT broker at {}:{} for connectivity", mqtt_host, mqtt_port);
-
-            // Prüfen, ob der Host aufgelöst werden kann
-            if let Err(e) = lookup_host((mqtt_host, mqtt_port)).await {
-                error!(
-                "Failed to resolve MQTT broker address ({}:{}): {}. Retrying in {:?}...",
-                mqtt_host, mqtt_port, e, retry_interval
-            );
-                sleep(retry_interval).await;
-                continue;
-            }
-
-            debug!("Configuring broker at {}:{}", mqtt_host, mqtt_port);
+            debug!("Configuring MQTT broker at {}:{}", mqtt_host, mqtt_port);
 
             let mut mqtt_options = MqttOptions::new(mqtt_client_id, mqtt_host, mqtt_port);
             mqtt_options.set_keep_alive(Duration::from_secs(10)); // Heartbeat every 10 seconds
             mqtt_options.set_clean_session(true); // Clear old sessions
+            mqtt_options.set_credentials(&self.username, &self.password); // Set credentials
 
             let (client, mut eventloop) = AsyncClient::new(mqtt_options, 10);
 
@@ -66,20 +60,19 @@ impl MqttService {
                 *client_state = ClientState::Connecting;
             }
 
-            // Versuch, eine Verbindung aufzubauen und zu abonnieren
-            match client.subscribe("upload/control", QoS::AtLeastOnce).await {
+            // Attempt to subscribe to the root topic
+            let control_topic = format!("{}/control", self.root_topic);
+            match client.subscribe(&control_topic, QoS::AtLeastOnce).await {
                 Ok(_) => {
-                    info!("Successfully subscribed to topic 'upload/control'.");
+                    info!("Successfully subscribed to topic '{}'.", control_topic);
                     {
                         let mut client_state = self.client_state.lock().await;
                         *client_state = ClientState::Connected;
                     }
-
-                    // Reset retry interval after successful connection
-                    retry_interval = Duration::from_secs(5);
+                    retry_interval = Duration::from_secs(5); // Reset retry interval
                 }
                 Err(e) => {
-                    error!("Subscription failed: {}", e);
+                    error!("Subscription to '{}' failed: {}", control_topic, e);
                     {
                         let mut client_state = self.client_state.lock().await;
                         *client_state = ClientState::Error(e.to_string());
@@ -110,11 +103,7 @@ impl MqttService {
                 }
             }
 
-            // Erneute Verbindung versuchen
-            warn!(
-            "Lost connection to MQTT broker. Retrying in {:?}...",
-            retry_interval
-        );
+            warn!("Lost connection to MQTT broker. Retrying in {:?}...", retry_interval);
             sleep(retry_interval).await;
             retry_interval = (retry_interval * 2).min(Duration::from_secs(60)); // Exponential backoff
         }
@@ -127,13 +116,11 @@ impl MqttService {
                 let payload =
                     String::from_utf8(publish.payload.to_vec()).unwrap_or_else(|_| "".to_string());
 
-                match topic.as_str() {
-                    "upload/control" => {
-                        self.handle_upload_command(payload).await;
-                    }
-                    _ => {
-                        warn!("Unknown topic received: {}", topic);
-                    }
+                let control_topic = format!("{}/control", self.root_topic);
+                if topic == control_topic {
+                    self.handle_upload_command(payload).await;
+                } else {
+                    warn!("Unknown topic received: {}", topic);
                 }
             }
             Event::Incoming(Packet::ConnAck(_)) => {
@@ -149,7 +136,10 @@ impl MqttService {
     }
 
     async fn handle_upload_command(&self, payload: String) {
-        if let Some(cmd) = payload.strip_prefix("start ") {
+        let start_prefix = format!("{}/start ", self.root_topic);
+        let cancel_prefix = format!("{}/cancel ", self.root_topic);
+
+        if let Some(cmd) = payload.strip_prefix(&start_prefix) {
             let file = cmd.trim().to_string();
             info!("Starting upload for file: {}", file);
 
@@ -160,10 +150,7 @@ impl MqttService {
                 client,
                 file.clone(),
             ));
-            self.state
-                .lock()
-                .await
-                .insert(file.clone(), tracker.clone());
+            self.state.lock().await.insert(file.clone(), tracker.clone());
 
             let state_clone = self.state.clone();
             tokio::spawn(async move {
@@ -171,7 +158,7 @@ impl MqttService {
                     error!("Upload failed for file {}: {:?}", file, e);
                 }
             });
-        } else if let Some(cmd) = payload.strip_prefix("cancel ") {
+        } else if let Some(cmd) = payload.strip_prefix(&cancel_prefix) {
             let file = cmd.trim().to_string();
             self.state.lock().await.remove(&file);
             info!("Upload canceled for file: {}", file);
