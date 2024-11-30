@@ -1,0 +1,44 @@
+version: '3.8'
+services:
+  #  uploader:
+  #    container_name: uploader-dev
+  #    build:
+  #      context: .
+  #    environment:
+  #      - MQTT_HOST=mqtt
+  #      - MQTT_PORT=1883
+  #      - SFTP_HOST=sftp
+  #      - SFTP_PORT=22
+  #      - SFTP_USER=test
+  #      - SFTP_PASSWORD=test
+  #      - SFTP_REMOTE_DIR=/uploads
+  #    depends_on:
+  #      - mqtt
+  #      - sftp
+  #
+  #  mqtt:
+  #    container_name: mqtt-dev
+  #    image: eclipse-mosquitto
+  #    ports:
+  #      - "1883:1883"
+  #    volumes:
+  #      - mosquitto_data:/mosquitto/data
+  #      - mosquitto_log:/mosquitto/log
+  sftp:
+    image: atmoz/sftp
+    ports:
+      - "2222:22"
+    volumes:
+      - ~/sftp_data:/home/test/uploads
+      - ~/sftp_readonly:/home/test/readonly:ro
+      - ~/sftp_writeonly:/home/test/writeonly
+      - ~/sshkeys:/home/test/.ssh/keys:ro
+      - ~/logs:/var/log/sftp
+    environment:
+      - SFTP_USERS=test:test:1001:1001:/uploads,user2:password:1002:1002:/shared/uploads
+      - SFTP_LOG_LEVEL=DEBUG
+
+volumes:
+  sftp_data:
+  sftp_readonly:
+  sftp_writeonly:
