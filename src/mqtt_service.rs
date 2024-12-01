@@ -18,7 +18,6 @@ pub struct UploadRequest {
     pub files: Option<Vec<FileDetail>>,
     pub compression: Option<CompressionConfig>,
     pub file_filters: Option<Vec<String>>,
-    pub upload_strategy: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -10,7 +10,6 @@ pub struct Config {
     pub mqtt_port: u16,
     pub mqtt_username: String,
     pub mqtt_password: String,
-    pub mqtt_root_topic: String,
     pub mqtt_max_retries: i32,
     pub mqtt_retry_interval_ms: u64,
 
@@ -111,7 +110,6 @@ impl Config {
                 .map_err(|_| ConfigError::ParsingError("MQTT_PORT must be a valid number".to_string()))?,
             mqtt_username: env::var("MQTT_USERNAME").unwrap_or_default(), // Default to empty
             mqtt_password: env::var("MQTT_PASSWORD").unwrap_or_default(), // Default to empty
-            mqtt_root_topic: mqtt_root_topic.clone(),
             mqtt_max_retries: env::var("MQTT_MAX_RETRIES")
                 .unwrap_or_else(|_| "-1".to_string())
                 .parse::<i32>()
