@@ -1,11 +1,38 @@
 use crate::progress_tracker::{ProgressTracker, SharedState};
-use crate::upload::process_and_upload;
 use log::{debug, error, info, warn};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::net::lookup_host;
 use tokio::time::{sleep, Duration};
+
+use serde::Deserialize;
+use serde_json;
+use uuid::Uuid;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct UploadRequest {
+    #[serde(rename = "type")]
+    pub upload_type: String, // "smb" or "sftp"
+    pub recursive: Option<bool>,
+    pub root_folder: Option<String>,
+    pub files: Option<Vec<FileDetail>>,
+    pub compression: Option<CompressionConfig>,
+    pub file_filters: Option<Vec<String>>,
+    pub upload_strategy: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FileDetail {
+    pub source_path: String,
+    pub destination_path: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CompressionConfig {
+    pub enabled: bool,
+    pub quality: u8,
+}
+
 
 #[derive(Debug)]
 enum ClientState {
@@ -14,24 +41,23 @@ enum ClientState {
     Connected,
     Error(String),
 }
+use crate::config::Config;
+use crate::upload;
+
 pub struct MqttService {
     client_state: Mutex<ClientState>,
     client: Mutex<Option<AsyncClient>>,
-    state: SharedState,
-    root_topic: String,  // Root topic for MQTT messages
-    username: String,    // MQTT username
-    password: String,    // MQTT password
+    state: SharedState,  // Root topic for MQTT messages
+    config: Config,
 }
 
 impl MqttService {
-    pub fn new(state: SharedState, root_topic: String, username: String, password: String) -> Arc<Self> {
+    pub fn new(state: SharedState, config: Config) -> Arc<Self> {
         Arc::new(Self {
             client_state: Mutex::new(ClientState::Disconnected),
             client: Mutex::new(None),
             state,
-            root_topic,
-            username,
-            password,
+            config
         })
     }
 
@@ -46,7 +72,7 @@ impl MqttService {
             let mut mqtt_options = MqttOptions::new(mqtt_client_id, mqtt_host, mqtt_port);
             mqtt_options.set_keep_alive(Duration::from_secs(10)); // Heartbeat every 10 seconds
             mqtt_options.set_clean_session(true); // Clear old sessions
-            mqtt_options.set_credentials(&self.username, &self.password); // Set credentials
+            mqtt_options.set_credentials(&self.config.mqtt_username, &self.config.mqtt_username); // Set credentials
 
             let (client, mut eventloop) = AsyncClient::new(mqtt_options, 10);
 
@@ -61,7 +87,7 @@ impl MqttService {
             }
 
             // Attempt to subscribe to the root topic
-            let control_topic = format!("{}/control", self.root_topic);
+            let control_topic = format!("{}/control", self.config.mqtt_root_topic);
             match client.subscribe(&control_topic, QoS::AtLeastOnce).await {
                 Ok(_) => {
                     info!("Successfully subscribed to topic '{}'.", control_topic);
@@ -116,7 +142,7 @@ impl MqttService {
                 let payload =
                     String::from_utf8(publish.payload.to_vec()).unwrap_or_else(|_| "".to_string());
 
-                let control_topic = format!("{}/control", self.root_topic);
+                let control_topic = format!("{}/control", self.config.mqtt_root_topic);
                 if topic == control_topic {
                     self.handle_upload_command(payload).await;
                 } else {
@@ -134,36 +160,48 @@ impl MqttService {
             }
         }
     }
-
     async fn handle_upload_command(&self, payload: String) {
-        let start_prefix = format!("{}/start ", self.root_topic);
-        let cancel_prefix = format!("{}/cancel ", self.root_topic);
+        // Parse the JSON payload
+        let upload_request: UploadRequest = match serde_json::from_str(&payload) {
+            Ok(req) => req,
+            Err(e) => {
+                error!("Failed to parse upload command JSON: {:?}", e);
+                return;
+            }
+        };
 
-        if let Some(cmd) = payload.strip_prefix(&start_prefix) {
-            let file = cmd.trim().to_string();
-            info!("Starting upload for file: {}", file);
+        info!("Received upload request: {:?}", upload_request);
 
-            let client = self.client.lock().await.clone().unwrap();
+        let client = self.client.lock().await.clone().unwrap();
 
-            let tracker = Arc::new(ProgressTracker::new(
-                1_000_000, // Example total size
-                client,
-                file.clone(),
-            ));
-            self.state.lock().await.insert(file.clone(), tracker.clone());
+        // Generate a unique identifier for the upload task
+        let upload_task_id = Uuid::new_v4().to_string();
 
-            let state_clone = self.state.clone();
-            tokio::spawn(async move {
-                if let Err(e) = process_and_upload(tracker, state_clone).await {
-                    error!("Upload failed for file {}: {:?}", file, e);
-                }
-            });
-        } else if let Some(cmd) = payload.strip_prefix(&cancel_prefix) {
-            let file = cmd.trim().to_string();
-            self.state.lock().await.remove(&file);
-            info!("Upload canceled for file: {}", file);
-        } else {
-            warn!("Unknown command received: {}", payload);
-        }
+        let tracker = Arc::new(ProgressTracker::new(
+            1_000_000u64,
+            client,
+            upload_task_id.clone(),
+        ));
+
+
+        // Store the tracker in shared state
+        self.state.lock().await.insert(upload_task_id.clone(), tracker.clone());
+
+        let state_clone = self.state.clone();
+        let upload_request_clone = upload_request.clone();
+        let config_clone = self.config.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = upload::process_and_upload(
+                tracker,
+                upload_request_clone,
+                config_clone,
+                state_clone,
+            )
+                .await
+            {
+                error!("Upload failed: {:?}", e);
+            }
+        });
     }
 }

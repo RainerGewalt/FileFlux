@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::env;
 use thiserror::Error;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub mqtt_host: String,
     pub mqtt_port: u16,
@@ -17,6 +17,8 @@ pub struct Config {
     pub smb_target_ip: String,
     pub smb_share_name: String,
     pub smb_target_folder: String,
+    pub smb_username: String,
+    pub smb_password: String,
     pub smb_connection_timeout_ms: u64,
 
     // SFTP Configuration
@@ -57,7 +59,7 @@ pub enum ConfigError {
 
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
-        dotenv().ok();
+        dotenv().ok(); // Load environment variables from .env file
 
         Ok(Self {
             // MQTT Configuration
@@ -78,14 +80,30 @@ impl Config {
                 .parse::<u64>()
                 .map_err(|_| ConfigError::ParsingError("MQTT_RETRY_INTERVAL_MS must be a valid number".to_string()))?,
 
-            // SMB Default Configuration
+            // SMB Configuration
             smb_target_ip: env::var("SMB_TARGET_IP").map_err(|_| ConfigError::MissingOrInvalid("SMB_TARGET_IP".to_string()))?,
             smb_share_name: env::var("SMB_SHARE_NAME").unwrap_or_else(|_| "default_share".to_string()),
             smb_target_folder: env::var("SMB_TARGET_FOLDER").map_err(|_| ConfigError::MissingOrInvalid("SMB_TARGET_FOLDER".to_string()))?,
+            smb_username: env::var("SMB_USERNAME").map_err(|_| ConfigError::MissingOrInvalid("SMB_USERNAME".to_string()))?, // Added
+            smb_password: env::var("SMB_PASSWORD").map_err(|_| ConfigError::MissingOrInvalid("SMB_PASSWORD".to_string()))?, // Added
             smb_connection_timeout_ms: env::var("SMB_CONNECTION_TIMEOUT_MS")
                 .unwrap_or_else(|_| "10000".to_string())
                 .parse::<u64>()
                 .map_err(|_| ConfigError::ParsingError("SMB_CONNECTION_TIMEOUT_MS must be a valid number".to_string()))?,
+
+            // SFTP Configuration
+            sftp_host: env::var("SFTP_HOST").map_err(|_| ConfigError::MissingOrInvalid("SFTP_HOST".to_string()))?,
+            sftp_port: env::var("SFTP_PORT")
+                .unwrap_or_else(|_| "22".to_string())
+                .parse::<u16>()
+                .map_err(|_| ConfigError::ParsingError("SFTP_PORT must be a valid number".to_string()))?,
+            sftp_username: env::var("SFTP_USERNAME").map_err(|_| ConfigError::MissingOrInvalid("SFTP_USERNAME".to_string()))?,
+            sftp_password: env::var("SFTP_PASSWORD").map_err(|_| ConfigError::MissingOrInvalid("SFTP_PASSWORD".to_string()))?,
+            sftp_target_folder: env::var("SFTP_TARGET_FOLDER").unwrap_or_else(|_| "/remote/uploads".to_string()),
+            sftp_connection_timeout_ms: env::var("SFTP_CONNECTION_TIMEOUT_MS")
+                .unwrap_or_else(|_| "10000".to_string())
+                .parse::<u64>()
+                .map_err(|_| ConfigError::ParsingError("SFTP_CONNECTION_TIMEOUT_MS must be a valid number".to_string()))?,
 
             // File Handling
             default_file_source: env::var("DEFAULT_FILE_SOURCE").unwrap_or_else(|_| "/data/uploads".to_string()),
@@ -140,3 +158,4 @@ impl Config {
         })
     }
 }
+

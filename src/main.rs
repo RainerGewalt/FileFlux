@@ -32,21 +32,15 @@ async fn main() {
     // Shared state for progress tracking
     let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
 
-    // Extract MQTT-related configuration
-    let root_topic = config.mqtt_root_topic.clone();
-    let username = config.mqtt_username.clone();
-    let password = config.mqtt_password.clone();
+    // Create and start MQTT service
+    let mqtt_service = MqttService::new(state.clone(), config.clone());
+
     let mqtt_host = config.mqtt_host.clone();
     let mqtt_port = config.mqtt_port;
+    let mqtt_client_id = format!("mqtt_service_{}", Uuid::new_v4());
 
-    // Start MQTT service with configuration
-    let mqtt_service = MqttService::new(state.clone(), root_topic, username, password);
-
-    let mqtt_service_clone = mqtt_service.clone();
-    let uuid = Uuid::new_v4();
-    let mqtt_client_id = format!("sftp_worker{}", uuid);
     tokio::spawn(async move {
-        mqtt_service_clone
+        mqtt_service
             .start(&mqtt_host, mqtt_port, &mqtt_client_id)
             .await;
     });
