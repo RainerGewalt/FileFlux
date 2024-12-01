@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::mqtt_service::{FileDetail, UploadRequest};
 use crate::progress_tracker::{ProgressTracker, SharedState};
-use log::{error, info};
+use log::{error, info, warn};
 use std::error::Error;
 use std::future::Future;
 use std::io::Write;
@@ -30,31 +30,43 @@ pub async fn process_and_upload(
     let total_size = estimate_total_size(&files_to_upload).await?;
     tracker.set_total_size(total_size);
 
-    // Verwendung einer Semaphore für kontrollierte Parallelität
-    let semaphore = Arc::new(Semaphore::new(5)); // Anzahl der parallelen Uploads
-    let mut tasks = Vec::new();
+    // Adjust upload strategy
+    match config.upload_strategy.as_str() {
+        "batch" => {
+            let semaphore = Arc::new(Semaphore::new(5)); // Number of concurrent uploads
+            let mut tasks = Vec::new();
 
-    for file_detail in files_to_upload {
-        let permit = semaphore.clone().acquire_owned().await?;
-        let tracker = tracker.clone();
-        let config = config.clone();
-        let upload_request = upload_request.clone();
+            for file_detail in files_to_upload {
+                let permit = semaphore.clone().acquire_owned().await?;
+                let tracker = tracker.clone();
+                let config = config.clone();
+                let upload_request = upload_request.clone();
 
-        tasks.push(tokio::spawn(async move {
-            let result = upload_single_file(file_detail, &upload_request, &config, tracker).await;
-            drop(permit); // Freigabe der Semaphore
-            result
-        }));
-    }
+                tasks.push(tokio::spawn(async move {
+                    let result = upload_single_file(file_detail, &upload_request, &config, tracker).await;
+                    drop(permit); // Release the semaphore
+                    result
+                }));
+            }
 
-    // Warten auf alle Uploads
-    for task in tasks {
-        if let Err(e) = task.await.unwrap_or_else(|_| Err("Task panicked".into())) {
-            error!("Fehler beim Upload: {:?}", e);
+            // Wait for all uploads
+            for task in tasks {
+                if let Err(e) = task.await.unwrap_or_else(|_| Err("Task panicked".into())) {
+                    error!("Error during upload: {:?}", e);
+                }
+            }
         }
+        "sequential" => {
+            for file_detail in files_to_upload {
+                if let Err(e) = upload_single_file(file_detail, &upload_request, &config, tracker.clone()).await {
+                    error!("Error during upload: {:?}", e);
+                }
+            }
+        }
+        _ => return Err("Unsupported upload strategy".into()),
     }
 
-    info!("Upload erfolgreich abgeschlossen.");
+    info!("Upload successfully completed.");
     Ok(())
 }
 
@@ -62,7 +74,7 @@ async fn collect_files(
     upload_request: &UploadRequest,
     config: &Config,
 ) -> Result<Vec<FileDetail>, Box<dyn Error + Send + Sync>> {
-    if upload_request.recursive.unwrap_or(false) {
+    let files = if upload_request.recursive.unwrap_or(config.recursive_upload) {
         let root_folder = upload_request
             .root_folder
             .as_deref()
@@ -71,13 +83,35 @@ async fn collect_files(
             .file_filters
             .as_ref()
             .unwrap_or(&config.file_filters);
-        collect_files_recursively(root_folder, file_filters).await
+        collect_files_recursively(root_folder, file_filters).await?
     } else if let Some(ref files) = upload_request.files {
-        Ok(files.clone())
+        files.clone()
     } else {
-        Err("Keine Dateien zum Upload angegeben.".into())
+        return Err("No files provided for upload.".into());
+    };
+
+    // Apply file size filter asynchronously
+    let max_size_bytes = (config.max_file_upload_size_mb * 1024 * 1024) as u64;
+    let mut valid_files = Vec::new();
+
+    for file in files {
+        if let Ok(metadata) = tokio::fs::metadata(&file.source_path).await {
+            if metadata.len() <= max_size_bytes {
+                valid_files.push(file);
+            } else {
+                warn!(
+                    "File {} exceeds the maximum size limit of {} MB and will be skipped.",
+                    file.source_path, config.max_file_upload_size_mb
+                );
+            }
+        } else {
+            warn!("Failed to read metadata for file: {}", file.source_path);
+        }
     }
+
+    Ok(valid_files)
 }
+
 
 fn collect_files_recursively<'a>(
     root_folder: &'a str,
@@ -112,7 +146,6 @@ fn collect_files_recursively<'a>(
         Ok(files)
     })
 }
-
 
 async fn estimate_total_size(
     files: &[FileDetail],
