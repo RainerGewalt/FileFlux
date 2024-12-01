@@ -186,6 +186,34 @@ impl MqttService {
             }
         }
     }
+    pub async fn publish_message(
+        &self,
+        topic_suffix: &str,
+        message: &str,
+        qos: QoS,
+        retain: bool,
+    ) {
+        let client = self.client.lock().await;
+        if let Some(client) = client.as_ref() {
+            let full_topic = format!(
+                "{}/{}",
+                self.config.mqtt_root_topic.trim_end_matches('/'),
+                topic_suffix.trim_start_matches('/')
+            );
+
+            match client.publish(full_topic.clone(), qos, retain, message).await {
+                Ok(_) => {
+                    info!("Message published to '{}': {}", full_topic, message);
+                }
+                Err(e) => {
+                    error!("Failed to publish message to '{}': {:?}", full_topic, e);
+                }
+            }
+        } else {
+            error!("MQTT client is not connected. Unable to publish message.");
+        }
+    }
+
     async fn handle_upload_command(&self, payload: String) {
         // Parse the JSON payload
         let upload_request: UploadRequest = match serde_json::from_str(&payload) {
