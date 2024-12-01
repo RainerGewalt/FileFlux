@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpStream;
@@ -169,8 +170,10 @@ where
 
     let full_destination_path = format!("{}/{}", config.smb_target_folder, destination_path);
 
+    // Add timeout to the smbclient command
     let smb_command = format!(
-        "smbclient //{}/{} -U {}%{} -c 'put - \"{}\"'",
+        "timeout {} smbclient //{}/{} -U {}%{} -c 'put - \"{}\"'",
+        config.smb_connection_timeout_ms / 1000, // Convert ms to seconds for the timeout command
         config.smb_target_ip,
         config.smb_share_name,
         config.smb_username,
@@ -213,7 +216,14 @@ async fn sftp_upload<R>(
 where
     R: io::AsyncRead + Unpin + Send,
 {
-    let tcp = TcpStream::connect(format!("{}:{}", config.sftp_host, config.sftp_port)).await?;
+    // Apply timeout to the TCP connection
+    let tcp = tokio::time::timeout(
+        Duration::from_millis(config.sftp_connection_timeout_ms),
+        TcpStream::connect(format!("{}:{}", config.sftp_host, config.sftp_port))
+    )
+        .await
+        .map_err(|_| "SFTP connection timed out")??; // Handle timeout error explicitly
+
     let tcp = tcp.into_std()?;
     let mut session = Session::new()?;
     session.set_tcp_stream(tcp);
@@ -221,7 +231,11 @@ where
     session.userauth_password(&config.sftp_username, &config.sftp_password)?;
 
     let sftp = session.sftp()?;
-    let mut remote_file = sftp.create(Path::new(destination_path))?;
+
+    // Construct the full path using `sftp_target_folder`
+    let full_destination_path = format!("{}/{}", config.sftp_target_folder, destination_path);
+
+    let mut remote_file = sftp.create(Path::new(&full_destination_path))?;
     let mut buffer = [0; CHUNK_SIZE];
     loop {
         let n = reader.read(&mut buffer).await?;
@@ -234,6 +248,7 @@ where
 
     Ok(())
 }
+
 async fn compress_stream(
     file: File,
     quality: u8,

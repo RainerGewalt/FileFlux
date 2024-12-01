@@ -56,20 +56,59 @@ pub enum ConfigError {
     #[error("Parsing error: {0}")]
     ParsingError(String),
 }
-
 impl Config {
+    /// Validate timeout values and other critical configurations.
+    fn validate_timeouts(&self) -> Result<(), ConfigError> {
+        const MIN_TIMEOUT: u64 = 100;
+        const MAX_TIMEOUT: u64 = 1_000_000;
+
+        if !(MIN_TIMEOUT..=MAX_TIMEOUT).contains(&self.mqtt_retry_interval_ms) {
+            return Err(ConfigError::ParsingError(format!(
+                "MQTT_RETRY_INTERVAL_MS must be between {} and {} ms",
+                MIN_TIMEOUT, MAX_TIMEOUT
+            )));
+        }
+        if !(MIN_TIMEOUT..=MAX_TIMEOUT).contains(&self.smb_connection_timeout_ms) {
+            return Err(ConfigError::ParsingError(format!(
+                "SMB_CONNECTION_TIMEOUT_MS must be between {} and {} ms",
+                MIN_TIMEOUT, MAX_TIMEOUT
+            )));
+        }
+        if !(MIN_TIMEOUT..=MAX_TIMEOUT).contains(&self.sftp_connection_timeout_ms) {
+            return Err(ConfigError::ParsingError(format!(
+                "SFTP_CONNECTION_TIMEOUT_MS must be between {} and {} ms",
+                MIN_TIMEOUT, MAX_TIMEOUT
+            )));
+        }
+        if !(MIN_TIMEOUT..=MAX_TIMEOUT).contains(&self.connection_timeout_ms) {
+            return Err(ConfigError::ParsingError(format!(
+                "CONNECTION_TIMEOUT_MS must be between {} and {} ms",
+                MIN_TIMEOUT, MAX_TIMEOUT
+            )));
+        }
+
+        // Validate compression quality
+        if !(0..=100).contains(&self.compression_quality) {
+            return Err(ConfigError::ParsingError(
+                "COMPRESSION_QUALITY must be between 0 and 100".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     pub fn from_env() -> Result<Self, ConfigError> {
         dotenv().ok(); // Load environment variables from .env file
 
-        Ok(Self {
+        let config = Self {
             // MQTT Configuration
             mqtt_host: env::var("MQTT_HOST").map_err(|_| ConfigError::MissingOrInvalid("MQTT_HOST".to_string()))?,
             mqtt_port: env::var("MQTT_PORT")
                 .map_err(|_| ConfigError::MissingOrInvalid("MQTT_PORT".to_string()))?
                 .parse::<u16>()
                 .map_err(|_| ConfigError::ParsingError("MQTT_PORT must be a valid number".to_string()))?,
-            mqtt_username: env::var("MQTT_USERNAME").map_err(|_| ConfigError::MissingOrInvalid("MQTT_USERNAME".to_string()))?,
-            mqtt_password: env::var("MQTT_PASSWORD").map_err(|_| ConfigError::MissingOrInvalid("MQTT_PASSWORD".to_string()))?,
+            mqtt_username: env::var("MQTT_USERNAME").unwrap_or_else(|_| "".to_string()), // Default to empty
+            mqtt_password: env::var("MQTT_PASSWORD").unwrap_or_else(|_| "".to_string()), // Default to empty
             mqtt_root_topic: env::var("MQTT_ROOT_TOPIC").unwrap_or_else(|_| "image_uploader".to_string()),
             mqtt_max_retries: env::var("MQTT_MAX_RETRIES")
                 .unwrap_or_else(|_| "-1".to_string())
@@ -84,8 +123,8 @@ impl Config {
             smb_target_ip: env::var("SMB_TARGET_IP").map_err(|_| ConfigError::MissingOrInvalid("SMB_TARGET_IP".to_string()))?,
             smb_share_name: env::var("SMB_SHARE_NAME").unwrap_or_else(|_| "default_share".to_string()),
             smb_target_folder: env::var("SMB_TARGET_FOLDER").map_err(|_| ConfigError::MissingOrInvalid("SMB_TARGET_FOLDER".to_string()))?,
-            smb_username: env::var("SMB_USERNAME").map_err(|_| ConfigError::MissingOrInvalid("SMB_USERNAME".to_string()))?, // Added
-            smb_password: env::var("SMB_PASSWORD").map_err(|_| ConfigError::MissingOrInvalid("SMB_PASSWORD".to_string()))?, // Added
+            smb_username: env::var("SMB_USERNAME").unwrap_or_else(|_| "".to_string()), // Default to empty
+            smb_password: env::var("SMB_PASSWORD").unwrap_or_else(|_| "".to_string()), // Default to empty
             smb_connection_timeout_ms: env::var("SMB_CONNECTION_TIMEOUT_MS")
                 .unwrap_or_else(|_| "10000".to_string())
                 .parse::<u64>()
@@ -97,8 +136,8 @@ impl Config {
                 .unwrap_or_else(|_| "22".to_string())
                 .parse::<u16>()
                 .map_err(|_| ConfigError::ParsingError("SFTP_PORT must be a valid number".to_string()))?,
-            sftp_username: env::var("SFTP_USERNAME").map_err(|_| ConfigError::MissingOrInvalid("SFTP_USERNAME".to_string()))?,
-            sftp_password: env::var("SFTP_PASSWORD").map_err(|_| ConfigError::MissingOrInvalid("SFTP_PASSWORD".to_string()))?,
+            sftp_username: env::var("SFTP_USERNAME").unwrap_or_else(|_| "".to_string()), // Default to empty
+            sftp_password: env::var("SFTP_PASSWORD").unwrap_or_else(|_| "".to_string()), // Default to empty
             sftp_target_folder: env::var("SFTP_TARGET_FOLDER").unwrap_or_else(|_| "/remote/uploads".to_string()),
             sftp_connection_timeout_ms: env::var("SFTP_CONNECTION_TIMEOUT_MS")
                 .unwrap_or_else(|_| "10000".to_string())
@@ -155,7 +194,11 @@ impl Config {
                 .unwrap_or_else(|_| "false".to_string())
                 .parse::<bool>()
                 .map_err(|_| ConfigError::ParsingError("ENABLE_PROFILING must be true or false".to_string()))?,
-        })
+        };
+
+        // Validate timeouts after constructing the configuration
+        config.validate_timeouts()?;
+
+        Ok(config)
     }
 }
-
