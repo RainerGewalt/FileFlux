@@ -1,6 +1,7 @@
 use crate::config::Config;
-use crate::mqtt_service::{FileDetail, UploadRequest};
+use crate::mqtt_service::{FileDetail, MqttService, UploadRequest};
 use crate::progress_tracker::{ProgressTracker, SharedState};
+use crate::service_utils::{publish_analytics, publish_progress, publish_status, start_logging};
 use log::{error, info, warn};
 use std::error::Error;
 use std::future::Future;
@@ -25,10 +26,37 @@ pub async fn process_and_upload(
     upload_request: UploadRequest,
     config: Config,
     _state: SharedState,
+    mqtt_service: Arc<MqttService>, // Added mqtt_service as a parameter
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // Start logging the upload process
+    start_logging(
+        mqtt_service.clone(),
+        format!("Starting upload task {}", tracker.task_id),
+    );
+
+    // Publish status update
+    publish_status(
+        mqtt_service.clone(),
+        "upload_started".to_string(),
+        Some(format!("Upload task {} has started.", tracker.task_id)),
+    );
+
     let files_to_upload = collect_files(&upload_request, &config).await?;
+
     let total_size = estimate_total_size(&files_to_upload).await?;
-    tracker.set_total_size(total_size);
+    tracker.set_total_size(total_size).await;
+
+    // Publish analytics event
+    publish_analytics(
+        mqtt_service.clone(),
+        "files_collected".to_string(),
+        format!(
+            "Collected {} files totaling {} bytes for upload task {}.",
+            files_to_upload.len(),
+            total_size,
+            tracker.task_id
+        ),
+    );
 
     // Adjust upload strategy
     match config.upload_strategy.as_str() {
@@ -41,9 +69,17 @@ pub async fn process_and_upload(
                 let tracker = tracker.clone();
                 let config = config.clone();
                 let upload_request = upload_request.clone();
+                let mqtt_service = mqtt_service.clone();
 
                 tasks.push(tokio::spawn(async move {
-                    let result = upload_single_file(file_detail, &upload_request, &config, tracker).await;
+                    let result = upload_single_file(
+                        file_detail,
+                        &upload_request,
+                        &config,
+                        tracker,
+                        mqtt_service,
+                    )
+                        .await;
                     drop(permit); // Release the semaphore
                     result
                 }));
@@ -53,13 +89,47 @@ pub async fn process_and_upload(
             for task in tasks {
                 if let Err(e) = task.await.unwrap_or_else(|_| Err("Task panicked".into())) {
                     error!("Error during upload: {:?}", e);
+
+                    // Log error
+                    start_logging(
+                        mqtt_service.clone(),
+                        format!("Error during upload: {:?}", e),
+                    );
+
+                    // Publish status update
+                    publish_status(
+                        mqtt_service.clone(),
+                        "upload_error".to_string(),
+                        Some(format!("Error during upload task {}.", tracker.task_id)),
+                    );
                 }
             }
         }
         "sequential" => {
             for file_detail in files_to_upload {
-                if let Err(e) = upload_single_file(file_detail, &upload_request, &config, tracker.clone()).await {
+                if let Err(e) = upload_single_file(
+                    file_detail,
+                    &upload_request,
+                    &config,
+                    tracker.clone(),
+                    mqtt_service.clone(),
+                )
+                    .await
+                {
                     error!("Error during upload: {:?}", e);
+
+                    // Log error
+                    start_logging(
+                        mqtt_service.clone(),
+                        format!("Error during upload: {:?}", e),
+                    );
+
+                    // Publish status update
+                    publish_status(
+                        mqtt_service.clone(),
+                        "upload_error".to_string(),
+                        Some(format!("Error during upload task {}.", tracker.task_id)),
+                    );
                 }
             }
         }
@@ -67,6 +137,27 @@ pub async fn process_and_upload(
     }
 
     info!("Upload successfully completed.");
+
+    // Publish status update
+    publish_status(
+        mqtt_service.clone(),
+        "upload_completed".to_string(),
+        Some(format!("Upload task {} completed successfully.", tracker.task_id)),
+    );
+
+    // Publish analytics event
+    publish_analytics(
+        mqtt_service.clone(),
+        "upload_complete".to_string(),
+        format!("Upload task {} completed successfully.", tracker.task_id),
+    );
+
+    // Log completion
+    start_logging(
+        mqtt_service.clone(),
+        format!("Upload task {} completed successfully.", tracker.task_id),
+    );
+
     Ok(())
 }
 
@@ -112,11 +203,12 @@ async fn collect_files(
     Ok(valid_files)
 }
 
-
 fn collect_files_recursively<'a>(
     root_folder: &'a str,
     file_filters: &'a [String],
-) -> Pin<Box<dyn Future<Output = Result<Vec<FileDetail>, Box<dyn Error + Send + Sync>>> + Send + 'a>> {
+) -> Pin<
+    Box<dyn Future<Output = Result<Vec<FileDetail>, Box<dyn Error + Send + Sync>>> + Send + 'a>,
+> {
     Box::pin(async move {
         let mut files = Vec::new();
         let mut dir_entries = tokio::fs::read_dir(root_folder).await?;
@@ -162,29 +254,62 @@ async fn upload_single_file(
     upload_request: &UploadRequest,
     config: &Config,
     tracker: Arc<ProgressTracker>,
+    mqtt_service: Arc<MqttService>, // Added mqtt_service as a parameter
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // Start logging
+    start_logging(
+        mqtt_service.clone(),
+        format!("Starting upload of file {}", file_detail.source_path),
+    );
+
     let file = File::open(&file_detail.source_path).await?;
-    let reader: Box<dyn io::AsyncRead + Unpin + Send> =
-        if upload_request
-            .compression
-            .as_ref()
-            .map(|c| c.enabled)
-            .unwrap_or(config.allow_compression)
-        {
-            Box::new(compress_stream(file, config.compression_quality).await?)
-        } else {
-            Box::new(BufReader::new(file))
-        };
+    let reader: Box<dyn io::AsyncRead + Unpin + Send> = if upload_request
+        .compression
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(config.allow_compression)
+    {
+        Box::new(compress_stream(file, config.compression_quality).await?)
+    } else {
+        Box::new(BufReader::new(file))
+    };
 
     match upload_request.upload_type.as_str() {
         "smb" => {
-            smb_upload(reader, &file_detail.destination_path, config, tracker).await?
+            smb_upload(
+                reader,
+                &file_detail.destination_path,
+                config,
+                tracker.clone(),
+                mqtt_service.clone(),
+            )
+                .await?
         }
         "sftp" => {
-            sftp_upload(reader, &file_detail.destination_path, config, tracker).await?
+            sftp_upload(
+                reader,
+                &file_detail.destination_path,
+                config,
+                tracker.clone(),
+                mqtt_service.clone(),
+            )
+                .await?
         }
-        _ => return Err("Nicht unterstützter Upload-Typ".into()),
+        _ => return Err("Unsupported upload type".into()),
     }
+
+    // Publish analytics event
+    publish_analytics(
+        mqtt_service.clone(),
+        "file_uploaded".to_string(),
+        format!("File {} uploaded successfully.", file_detail.source_path),
+    );
+
+    // Log completion
+    start_logging(
+        mqtt_service.clone(),
+        format!("File {} uploaded successfully.", file_detail.source_path),
+    );
 
     Ok(())
 }
@@ -194,6 +319,7 @@ async fn smb_upload<R>(
     destination_path: &str,
     config: &Config,
     tracker: Arc<ProgressTracker>,
+    mqtt_service: Arc<MqttService>, // Added mqtt_service as a parameter
 ) -> Result<(), Box<dyn Error + Send + Sync>>
 where
     R: io::AsyncRead + Unpin + Send,
@@ -229,6 +355,13 @@ where
         }
         stdin.write_all(&buffer[..n]).await?;
         tracker.update_progress(n as u64).await;
+
+        // Publish progress
+        publish_progress(
+            mqtt_service.clone(),
+            *tracker.uploaded_size.lock().await,
+            *tracker.total_size.lock().await,
+        );
     }
     stdin.flush().await?;
     let status = child.wait().await?;
@@ -239,12 +372,12 @@ where
     Ok(())
 }
 
-
 async fn sftp_upload<R>(
     mut reader: R,
     destination_path: &str,
     config: &Config,
     tracker: Arc<ProgressTracker>,
+    mqtt_service: Arc<MqttService>, // Added mqtt_service as a parameter
 ) -> Result<(), Box<dyn Error + Send + Sync>>
 where
     R: io::AsyncRead + Unpin + Send,
@@ -252,7 +385,7 @@ where
     // Apply timeout to the TCP connection
     let tcp = tokio::time::timeout(
         Duration::from_millis(config.sftp_connection_timeout_ms),
-        TcpStream::connect(format!("{}:{}", config.sftp_host, config.sftp_port))
+        TcpStream::connect(format!("{}:{}", config.sftp_host, config.sftp_port)),
     )
         .await
         .map_err(|_| "SFTP connection timed out")??; // Handle timeout error explicitly
@@ -277,6 +410,13 @@ where
         }
         remote_file.write_all(&buffer[..n])?;
         tracker.update_progress(n as u64).await;
+
+        // Publish progress
+        publish_progress(
+            mqtt_service.clone(),
+            *tracker.uploaded_size.lock().await,
+            *tracker.total_size.lock().await,
+        );
     }
 
     Ok(())
@@ -293,4 +433,3 @@ async fn compress_stream(
 
     Ok(GzipEncoder::with_quality(BufReader::new(file), level))
 }
-

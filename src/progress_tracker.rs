@@ -1,25 +1,30 @@
-use rumqttc::{AsyncClient, QoS};
+use crate::mqtt_service::MqttService;
+use crate::service_utils::publish_progress;
+use log::info;
+use std::fmt;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::collections::HashMap;
-use log::{error, info};
-use std::fmt;
 
 pub type SharedState = Arc<Mutex<HashMap<String, Arc<ProgressTracker>>>>;
 
 pub struct ProgressTracker {
-    total_size: Mutex<u64>,    // Mutex to protect access to total_size
-    uploaded_size: Mutex<u64>, // Mutex to protect access to uploaded_size
-    client: AsyncClient,       // MQTT client for publishing progress
-    task_id: String,           // Unique identifier for the task
+    pub(crate) total_size: Mutex<u64>,
+    pub(crate) uploaded_size: Mutex<u64>,
+    mqtt_service: Arc<MqttService>,
+    pub task_id: String,  // Make task_id public if needed elsewhere
 }
 
 impl ProgressTracker {
-    pub fn new(total_size: u64, client: AsyncClient, task_id: String) -> Self {
+    pub fn new(
+        total_size: u64,
+        mqtt_service: Arc<MqttService>, // Expects Arc<MqttService>
+        task_id: String,
+    ) -> Self {
         Self {
-            total_size: Mutex::new(total_size), // Wrap the total_size in Mutex::new
-            uploaded_size: Mutex::new(0),      // Initialize uploaded_size with Mutex::new(0)
-            client,
+            total_size: Mutex::new(total_size),
+            uploaded_size: Mutex::new(0),
+            mqtt_service,
             task_id,
         }
     }
@@ -38,7 +43,7 @@ impl ProgressTracker {
         let total_size = *self.total_size.lock().await;
         *uploaded_size += bytes_uploaded;
 
-        let progress = if total_size > 0 {
+        let progress_percentage = if total_size > 0 {
             (*uploaded_size as f64 / total_size as f64) * 100.0
         } else {
             0.0
@@ -46,24 +51,19 @@ impl ProgressTracker {
 
         info!(
             "Progress update for task {}: {:.2}% uploaded",
-            self.task_id, progress
+            self.task_id, progress_percentage
         );
 
-        // Publish progress update over MQTT
-        let progress_topic = format!("progress/{}", self.task_id);
-        let progress_message = format!("{{\"progress\": {:.2}}}", progress);
-
-        if let Err(e) = self
-            .client
-            .publish(progress_topic, QoS::AtLeastOnce, false, progress_message)
-            .await
-        {
-            error!("Failed to publish progress update: {:?}", e);
-        }
+        // Use the publish_progress method
+        publish_progress(
+            self.mqtt_service.clone(),
+            *uploaded_size,
+            total_size,
+        );
     }
 }
 
-// Manual implementation of Debug for ProgressTracker
+// Implement Debug for ProgressTracker
 impl fmt::Debug for ProgressTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProgressTracker")

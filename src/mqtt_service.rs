@@ -103,7 +103,7 @@ impl MqttService {
                 *client_state = ClientState::Connecting;
             }
 
-            let control_topic = format!("{}/control", self.config.mqtt_root_topic);
+            let control_topic = self.config.command_topic.clone();
             match client.subscribe(&control_topic, QoS::AtLeastOnce).await {
                 Ok(_) => {
                     info!("Successfully subscribed to topic '{}'.", control_topic);
@@ -226,7 +226,7 @@ impl MqttService {
     );
     }
 
-    async fn handle_upload_command(&self, payload: String) {
+    async fn handle_upload_command(self: Arc<Self>, payload: String) {
         // Parse the JSON payload
         let upload_request: UploadRequest = match serde_json::from_str(&payload) {
             Ok(req) => req,
@@ -238,17 +238,15 @@ impl MqttService {
 
         info!("Received upload request: {:?}", upload_request);
 
-        let client = self.client.lock().await.clone().unwrap();
-
         // Generate a unique identifier for the upload task
         let upload_task_id = Uuid::new_v4().to_string();
 
+        // Create the ProgressTracker with self.clone()
         let tracker = Arc::new(ProgressTracker::new(
             1_000_000u64,
-            client,
+            self.clone(), // Pass Arc<MqttService>
             upload_task_id.clone(),
         ));
-
 
         // Store the tracker in shared state
         self.state.lock().await.insert(upload_task_id.clone(), tracker.clone());
@@ -256,13 +254,13 @@ impl MqttService {
         let state_clone = self.state.clone();
         let upload_request_clone = upload_request.clone();
         let config_clone = self.config.clone();
-
         tokio::spawn(async move {
             if let Err(e) = upload::process_and_upload(
                 tracker,
                 upload_request_clone,
                 config_clone,
                 state_clone,
+                self.clone(),
             )
                 .await
             {
