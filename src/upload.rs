@@ -167,13 +167,15 @@ where
     use std::process::Stdio;
     use tokio::process::Command;
 
+    let full_destination_path = format!("{}/{}", config.smb_target_folder, destination_path);
+
     let smb_command = format!(
         "smbclient //{}/{} -U {}%{} -c 'put - \"{}\"'",
         config.smb_target_ip,
         config.smb_share_name,
         config.smb_username,
         config.smb_password,
-        destination_path
+        full_destination_path
     );
 
     let mut child = Command::new("sh")
@@ -182,7 +184,7 @@ where
         .stdin(Stdio::piped())
         .spawn()?;
 
-    let mut stdin = BufWriter::new(child.stdin.take().ok_or("Fehler beim Öffnen von stdin")?);
+    let mut stdin = BufWriter::new(child.stdin.take().ok_or("Failed to open stdin")?);
     let mut buffer = [0; CHUNK_SIZE];
     loop {
         let n = reader.read(&mut buffer).await?;
@@ -195,11 +197,12 @@ where
     stdin.flush().await?;
     let status = child.wait().await?;
     if !status.success() {
-        return Err("smbclient-Befehl fehlgeschlagen".into());
+        return Err("smbclient command failed".into());
     }
 
     Ok(())
 }
+
 
 async fn sftp_upload<R>(
     mut reader: R,
