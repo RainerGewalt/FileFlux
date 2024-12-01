@@ -168,12 +168,13 @@ impl MqttService {
                 let payload =
                     String::from_utf8(publish.payload.to_vec()).unwrap_or_else(|_| "".to_string());
 
-                let control_topic = format!("{}/control", self.config.mqtt_root_topic);
+                let control_topic = self.config.command_topic.clone();
                 if topic == control_topic {
                     self.handle_upload_command(payload).await;
                 } else {
                     warn!("Unknown topic received: {}", topic);
                 }
+
             }
             Event::Incoming(Packet::ConnAck(_)) => {
                 info!("Connected to MQTT broker.");
