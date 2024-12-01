@@ -48,7 +48,7 @@ pub struct MqttService {
     client_state: Mutex<ClientState>,
     client: Mutex<Option<AsyncClient>>,
     state: SharedState,  // Root topic for MQTT messages
-    config: Config,
+    pub(crate) config: Config,
 }
 
 impl MqttService {
@@ -193,25 +193,36 @@ impl MqttService {
         qos: QoS,
         retain: bool,
     ) {
-        let client = self.client.lock().await;
-        if let Some(client) = client.as_ref() {
-            let full_topic = format!(
-                "{}/{}",
-                self.config.mqtt_root_topic.trim_end_matches('/'),
-                topic_suffix.trim_start_matches('/')
-            );
+        for _ in 0..5 { // Retry up to 5 times
+            let client = self.client.lock().await;
+            if let Some(client) = client.as_ref() {
+                let full_topic = format!(
+                    "{}/{}",
+                    self.config.mqtt_root_topic.trim_end_matches('/'),
+                    topic_suffix.trim_start_matches('/')
+                );
 
-            match client.publish(full_topic.clone(), qos, retain, message).await {
-                Ok(_) => {
-                    info!("Message published to '{}': {}", full_topic, message);
+                match client.publish(full_topic.clone(), qos, retain, message).await {
+                    Ok(_) => {
+                        info!("Message published to '{}': {}", full_topic, message);
+                        return;
+                    }
+                    Err(e) => {
+                        error!("Failed to publish message to '{}': {:?}", full_topic, e);
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to publish message to '{}': {:?}", full_topic, e);
-                }
+            } else {
+                error!("MQTT client is not connected. Retrying...");
             }
-        } else {
-            error!("MQTT client is not connected. Unable to publish message.");
+
+            // Wait and retry
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
+
+        error!(
+        "Failed to publish message to topic '{}' after multiple retries: {}",
+        topic_suffix, message
+    );
     }
 
     async fn handle_upload_command(&self, payload: String) {

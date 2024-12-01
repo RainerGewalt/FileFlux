@@ -1,18 +1,19 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tracing::{error, info};
+// main.rs
 
 mod config;
 mod mqtt_service;
 mod progress_tracker;
 mod upload;
+mod service_utils;
 
-use config::Config;
-use mqtt_service::MqttService;
-use progress_tracker::SharedState;
-use uuid::Uuid;
-
+use crate::config::Config;
+use crate::mqtt_service::MqttService;
+use crate::progress_tracker::SharedState;
+use crate::service_utils::{handle_shutdown, publish_analytics, start_logging, start_mqtt_service};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{error, info};
 #[tokio::main]
 async fn main() {
     // Initialize logging
@@ -22,7 +23,7 @@ async fn main() {
 
     // Load configuration
     let config = match Config::from_env() {
-        Ok(cfg) => cfg,
+        Ok(cfg) => Arc::new(cfg),
         Err(e) => {
             error!("Error loading configuration: {:?}", e);
             return;
@@ -32,22 +33,24 @@ async fn main() {
     // Shared state for progress tracking
     let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
 
-    // Create and start MQTT service
-    let mqtt_service = MqttService::new(state.clone(), config.clone());
+    // Create MQTT service
+    let mqtt_service = MqttService::new(state.clone(), (*config).clone()); // Clone Config for MqttService
 
-    let mqtt_host = config.mqtt_host.clone();
-    let mqtt_port = config.mqtt_port;
-    let mqtt_client_id = format!("mqtt_service_{}", Uuid::new_v4());
+    // Start MQTT service
+    start_mqtt_service(mqtt_service.clone());
 
-    tokio::spawn(async move {
-        mqtt_service
-            .start(&mqtt_host, mqtt_port, &mqtt_client_id)
-            .await;
-    });
+    // Start logging
+    start_logging(mqtt_service.clone(), "Service is starting...".to_string());
 
-    // Wait for termination signal
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        error!("Failed to handle termination signal: {:?}", e);
-    }
-    info!("Service is shutting down...");
+    // Publish analytics
+    publish_analytics(
+        mqtt_service.clone(),
+        "mqtt_connected".to_string(),
+        "Service connected to MQTT broker".to_string(),
+    );
+
+    // Handle shutdown
+    handle_shutdown(mqtt_service.clone()).await;
+
+    info!("Service has shut down.");
 }
