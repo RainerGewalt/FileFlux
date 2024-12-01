@@ -9,11 +9,11 @@ mod service_utils;
 use crate::config::Config;
 use crate::mqtt_service::MqttService;
 use crate::progress_tracker::SharedState;
-use crate::service_utils::{handle_shutdown, publish_analytics, start_logging, start_mqtt_service};
+use crate::service_utils::{handle_shutdown, periodic_status_update, publish_status, start_logging, start_mqtt_service};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{error};
 #[tokio::main]
 async fn main() {
     // Initialize logging
@@ -42,15 +42,24 @@ async fn main() {
     // Start logging
     start_logging(mqtt_service.clone(), "Service is starting...".to_string());
 
-    // Publish analytics
-    publish_analytics(
+    // Start periodic status updates
+    periodic_status_update(mqtt_service.clone());
+
+    // Log start status
+    publish_status(
         mqtt_service.clone(),
-        "mqtt_connected".to_string(),
-        "Service connected to MQTT broker".to_string(),
+        "running".to_string(),
+        Some("Uploader service has started successfully.".to_string()),
     );
 
     // Handle shutdown
     handle_shutdown(mqtt_service.clone()).await;
 
-    info!("Service has shut down.");
+    // Log shutdown status
+    publish_status(
+        mqtt_service.clone(),
+        "shutdown".to_string(),
+        Some("Uploader service is shutting down.".to_string()),
+    );
 }
+
