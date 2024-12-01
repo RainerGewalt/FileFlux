@@ -60,19 +60,36 @@ impl MqttService {
             config
         })
     }
-
     pub async fn start(self: Arc<Self>, mqtt_host: &str, mqtt_port: u16, mqtt_client_id: &str) {
         info!("Starting MQTT service...");
 
-        let mut retry_interval = Duration::from_secs(5); // Initial retry interval
+        let initial_retry_interval = Duration::from_millis(self.config.mqtt_retry_interval_ms);
+        let max_retries = std::cmp::min(if self.config.mqtt_max_retries > 0 {
+            self.config.mqtt_max_retries
+        } else {
+            5
+        }, 100); // Default to 5, cap at 100
+        let mut retry_interval = initial_retry_interval;
+        let mut retries = 0;
 
         loop {
-            debug!("Configuring MQTT broker at {}:{}", mqtt_host, mqtt_port);
+            if max_retries != -1 && retries >= max_retries {
+                error!("Maximum number of retries ({}) reached. Stopping the service.", max_retries);
+                break;
+            }
+
+            debug!("Configuring MQTT broker at {}:{}...", mqtt_host, mqtt_port);
 
             let mut mqtt_options = MqttOptions::new(mqtt_client_id, mqtt_host, mqtt_port);
-            mqtt_options.set_keep_alive(Duration::from_secs(10)); // Heartbeat every 10 seconds
-            mqtt_options.set_clean_session(true); // Clear old sessions
-            mqtt_options.set_credentials(&self.config.mqtt_username, &self.config.mqtt_username); // Set credentials
+            mqtt_options.set_keep_alive(Duration::from_secs(10));
+            mqtt_options.set_clean_session(true);
+
+            if !self.config.mqtt_username.is_empty() && !self.config.mqtt_password.is_empty() {
+                mqtt_options.set_credentials(
+                    &self.config.mqtt_username,
+                    &self.config.mqtt_password,
+                );
+            }
 
             let (client, mut eventloop) = AsyncClient::new(mqtt_options, 10);
 
@@ -86,7 +103,6 @@ impl MqttService {
                 *client_state = ClientState::Connecting;
             }
 
-            // Attempt to subscribe to the root topic
             let control_topic = format!("{}/control", self.config.mqtt_root_topic);
             match client.subscribe(&control_topic, QoS::AtLeastOnce).await {
                 Ok(_) => {
@@ -95,21 +111,21 @@ impl MqttService {
                         let mut client_state = self.client_state.lock().await;
                         *client_state = ClientState::Connected;
                     }
-                    retry_interval = Duration::from_secs(5); // Reset retry interval
+                    retry_interval = initial_retry_interval;
                 }
                 Err(e) => {
-                    error!("Subscription to '{}' failed: {}", control_topic, e);
+                    error!("Failed to subscribe to topic '{}': {}", control_topic, e);
                     {
                         let mut client_state = self.client_state.lock().await;
                         *client_state = ClientState::Error(e.to_string());
                     }
+                    retries += 1;
                     sleep(retry_interval).await;
-                    retry_interval = (retry_interval * 2).min(Duration::from_secs(60)); // Exponential backoff
-                    continue; // Retry connection
+                    retry_interval = (retry_interval * 2).min(Duration::from_secs(60));
+                    continue;
                 }
             }
 
-            // Event loop
             loop {
                 match eventloop.poll().await {
                     Ok(event) => {
@@ -124,16 +140,26 @@ impl MqttService {
                             let mut client_state = self.client_state.lock().await;
                             *client_state = ClientState::Disconnected;
                         }
-                        break; // Exit inner loop to attempt reconnection
+                        break;
                     }
                 }
             }
 
-            warn!("Lost connection to MQTT broker. Retrying in {:?}...", retry_interval);
+            warn!(
+            "Lost connection to MQTT broker. Retrying in {:?}...",
+            retry_interval
+        );
+            retries += 1;
             sleep(retry_interval).await;
-            retry_interval = (retry_interval * 2).min(Duration::from_secs(60)); // Exponential backoff
+            retry_interval = (retry_interval * 2).min(Duration::from_secs(60));
         }
     }
+
+
+
+
+
+
 
     async fn handle_event(self: Arc<Self>, event: Event) {
         match event {
