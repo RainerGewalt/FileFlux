@@ -189,7 +189,7 @@ impl MqttService {
     }
     pub async fn publish_message(
         &self,
-        topic_suffix: &str,
+        topic: &str, // Direktes Topic ohne Root-Topic
         message: &str,
         qos: QoS,
         retain: bool,
@@ -197,11 +197,8 @@ impl MqttService {
         for _ in 0..5 { // Retry up to 5 times
             let client = self.client.lock().await;
             if let Some(client) = client.as_ref() {
-                let full_topic = format!(
-                    "{}/{}",
-                    self.config.mqtt_root_topic.trim_end_matches('/'),
-                    topic_suffix.trim_start_matches('/')
-                );
+                // Das Root-Topic ist bereits in der Konfiguration enthalten
+                let full_topic = topic.to_string();
 
                 match client.publish(full_topic.clone(), qos, retain, message).await {
                     Ok(_) => {
@@ -222,9 +219,10 @@ impl MqttService {
 
         error!(
         "Failed to publish message to topic '{}' after multiple retries: {}",
-        topic_suffix, message
+        topic, message
     );
     }
+
 
     async fn handle_upload_command(self: Arc<Self>, payload: String) {
         // Parse the JSON payload
