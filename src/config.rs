@@ -37,16 +37,11 @@ pub struct Config {
     pub file_filters: Vec<String>,
     pub upload_strategy: String,
 
-    pub log_level: String,
     pub log_topic: String,
     pub status_topic: String,
     pub command_topic: String,
-
-    pub healthcheck_interval_ms: u64,
-    pub connection_timeout_ms: u64,
-
-    pub debug_mode: bool,
-    pub enable_profiling: bool,
+    pub progress_topic: String,
+    pub analytics_topic: String,
 }
 
 #[derive(Debug, Error)]
@@ -77,12 +72,6 @@ impl Config {
         if !(MIN_TIMEOUT..=MAX_TIMEOUT).contains(&self.sftp_connection_timeout_ms) {
             return Err(ConfigError::ParsingError(format!(
                 "SFTP_CONNECTION_TIMEOUT_MS must be between {} and {} ms",
-                MIN_TIMEOUT, MAX_TIMEOUT
-            )));
-        }
-        if !(MIN_TIMEOUT..=MAX_TIMEOUT).contains(&self.connection_timeout_ms) {
-            return Err(ConfigError::ParsingError(format!(
-                "CONNECTION_TIMEOUT_MS must be between {} and {} ms",
                 MIN_TIMEOUT, MAX_TIMEOUT
             )));
         }
@@ -169,31 +158,14 @@ impl Config {
                 .collect(),
             upload_strategy: env::var("UPLOAD_STRATEGY").unwrap_or_else(|_| "batch".to_string()),
 
-            // Logging and Status Reporting
-            log_level: env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
+
+            // MQTT Topics
             log_topic: env::var("LOG_TOPIC").unwrap_or_else(|_| "logs".to_string()),
             status_topic: env::var("STATUS_TOPIC").unwrap_or_else(|_| "status".to_string()),
             command_topic: env::var("COMMAND_TOPIC").unwrap_or_else(|_| "commands".to_string()),
+            progress_topic: env::var("PROGRESS_TOPIC").unwrap_or_else(|_| "progress".to_string()), // Added
+            analytics_topic: env::var("ANALYTICS_TOPIC").unwrap_or_else(|_| "analytics".to_string()), // Added
 
-            // Health Checks
-            healthcheck_interval_ms: env::var("HEALTHCHECK_INTERVAL_MS")
-                .unwrap_or_else(|_| "30000".to_string())
-                .parse::<u64>()
-                .map_err(|_| ConfigError::ParsingError("HEALTHCHECK_INTERVAL_MS must be a valid number".to_string()))?,
-            connection_timeout_ms: env::var("CONNECTION_TIMEOUT_MS")
-                .unwrap_or_else(|_| "10000".to_string())
-                .parse::<u64>()
-                .map_err(|_| ConfigError::ParsingError("CONNECTION_TIMEOUT_MS must be a valid number".to_string()))?,
-
-            // Debugging and Development
-            debug_mode: env::var("DEBUG_MODE")
-                .unwrap_or_else(|_| "false".to_string())
-                .parse::<bool>()
-                .map_err(|_| ConfigError::ParsingError("DEBUG_MODE must be true or false".to_string()))?,
-            enable_profiling: env::var("ENABLE_PROFILING")
-                .unwrap_or_else(|_| "false".to_string())
-                .parse::<bool>()
-                .map_err(|_| ConfigError::ParsingError("ENABLE_PROFILING must be true or false".to_string()))?,
         };
 
         // Validate timeouts after constructing the configuration
