@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::env;
 use thiserror::Error;
 
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub mqtt_host: String,
@@ -51,6 +52,7 @@ pub enum ConfigError {
     #[error("Parsing error: {0}")]
     ParsingError(String),
 }
+
 impl Config {
     /// Validate timeout values and other critical configurations.
     fn validate_timeouts(&self) -> Result<(), ConfigError> {
@@ -89,6 +91,17 @@ impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         dotenv().ok(); // Load environment variables from .env file
 
+        // Helper to prepend root topic if available
+        let prepend_root_topic = |root: &str, topic: &str| {
+            if !root.is_empty() {
+                format!("{}/{}", root.trim_end_matches('/'), topic.trim_start_matches('/'))
+            } else {
+                topic.to_string()
+            }
+        };
+
+        let mqtt_root_topic = env::var("MQTT_ROOT_TOPIC").unwrap_or_else(|_| "image_uploader".to_string());
+
         let config = Self {
             // MQTT Configuration
             mqtt_host: env::var("MQTT_HOST").map_err(|_| ConfigError::MissingOrInvalid("MQTT_HOST".to_string()))?,
@@ -96,9 +109,9 @@ impl Config {
                 .map_err(|_| ConfigError::MissingOrInvalid("MQTT_PORT".to_string()))?
                 .parse::<u16>()
                 .map_err(|_| ConfigError::ParsingError("MQTT_PORT must be a valid number".to_string()))?,
-            mqtt_username: env::var("MQTT_USERNAME").unwrap_or_else(|_| "".to_string()), // Default to empty
-            mqtt_password: env::var("MQTT_PASSWORD").unwrap_or_else(|_| "".to_string()), // Default to empty
-            mqtt_root_topic: env::var("MQTT_ROOT_TOPIC").unwrap_or_else(|_| "image_uploader".to_string()),
+            mqtt_username: env::var("MQTT_USERNAME").unwrap_or_default(), // Default to empty
+            mqtt_password: env::var("MQTT_PASSWORD").unwrap_or_default(), // Default to empty
+            mqtt_root_topic: mqtt_root_topic.clone(),
             mqtt_max_retries: env::var("MQTT_MAX_RETRIES")
                 .unwrap_or_else(|_| "-1".to_string())
                 .parse::<i32>()
@@ -112,8 +125,8 @@ impl Config {
             smb_target_ip: env::var("SMB_TARGET_IP").map_err(|_| ConfigError::MissingOrInvalid("SMB_TARGET_IP".to_string()))?,
             smb_share_name: env::var("SMB_SHARE_NAME").unwrap_or_else(|_| "default_share".to_string()),
             smb_target_folder: env::var("SMB_TARGET_FOLDER").map_err(|_| ConfigError::MissingOrInvalid("SMB_TARGET_FOLDER".to_string()))?,
-            smb_username: env::var("SMB_USERNAME").unwrap_or_else(|_| "".to_string()), // Default to empty
-            smb_password: env::var("SMB_PASSWORD").unwrap_or_else(|_| "".to_string()), // Default to empty
+            smb_username: env::var("SMB_USERNAME").unwrap_or_default(), // Default to empty
+            smb_password: env::var("SMB_PASSWORD").unwrap_or_default(), // Default to empty
             smb_connection_timeout_ms: env::var("SMB_CONNECTION_TIMEOUT_MS")
                 .unwrap_or_else(|_| "10000".to_string())
                 .parse::<u64>()
@@ -125,8 +138,8 @@ impl Config {
                 .unwrap_or_else(|_| "22".to_string())
                 .parse::<u16>()
                 .map_err(|_| ConfigError::ParsingError("SFTP_PORT must be a valid number".to_string()))?,
-            sftp_username: env::var("SFTP_USERNAME").unwrap_or_else(|_| "".to_string()), // Default to empty
-            sftp_password: env::var("SFTP_PASSWORD").unwrap_or_else(|_| "".to_string()), // Default to empty
+            sftp_username: env::var("SFTP_USERNAME").unwrap_or_default(),
+            sftp_password: env::var("SFTP_PASSWORD").unwrap_or_default(),
             sftp_target_folder: env::var("SFTP_TARGET_FOLDER").unwrap_or_else(|_| "/remote/uploads".to_string()),
             sftp_connection_timeout_ms: env::var("SFTP_CONNECTION_TIMEOUT_MS")
                 .unwrap_or_else(|_| "10000".to_string())
@@ -158,14 +171,12 @@ impl Config {
                 .collect(),
             upload_strategy: env::var("UPLOAD_STRATEGY").unwrap_or_else(|_| "batch".to_string()),
 
-
             // MQTT Topics
-            log_topic: env::var("LOG_TOPIC").unwrap_or_else(|_| "logs".to_string()),
-            status_topic: env::var("STATUS_TOPIC").unwrap_or_else(|_| "status".to_string()),
-            command_topic: env::var("COMMAND_TOPIC").unwrap_or_else(|_| "commands".to_string()),
-            progress_topic: env::var("PROGRESS_TOPIC").unwrap_or_else(|_| "progress".to_string()), // Added
-            analytics_topic: env::var("ANALYTICS_TOPIC").unwrap_or_else(|_| "analytics".to_string()), // Added
-
+            log_topic: prepend_root_topic(&mqtt_root_topic, "/logs"),
+            status_topic: prepend_root_topic(&mqtt_root_topic, "/status"),
+            command_topic: prepend_root_topic(&mqtt_root_topic, "/commands"),
+            progress_topic: prepend_root_topic(&mqtt_root_topic, "/progress"),
+            analytics_topic: prepend_root_topic(&mqtt_root_topic, "/analytics"),
         };
 
         // Validate timeouts after constructing the configuration
@@ -174,3 +185,4 @@ impl Config {
         Ok(config)
     }
 }
+
