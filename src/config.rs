@@ -42,6 +42,10 @@ pub struct Config {
     pub command_topic: String,
     pub progress_topic: String,
     pub analytics_topic: String,
+
+
+    pub directory_topic: String,
+    pub output_folder: String,
 }
 
 #[derive(Debug, Error)]
@@ -175,6 +179,9 @@ impl Config {
             command_topic: prepend_root_topic(&mqtt_root_topic, "/commands"),
             progress_topic: prepend_root_topic(&mqtt_root_topic, "/progress"),
             analytics_topic: prepend_root_topic(&mqtt_root_topic, "/analytics"),
+            directory_topic: prepend_root_topic(&mqtt_root_topic, "/directory"),
+            output_folder: env::var("OUTPUT_FOLDER")
+                .unwrap_or_else(|_| "./upload_folder".to_string()),
         };
 
         // Validate timeouts after constructing the configuration

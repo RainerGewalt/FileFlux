@@ -1,7 +1,10 @@
-use std::sync::Arc;
-use tracing::{error, info};
-use uuid::Uuid;
 
+
+use uuid::Uuid;
+use crate::scan_directory_structure::scan_directory_structure;
+use std::sync::Arc;
+use tokio::time::{ Duration};
+use tracing::{error, info};
 use crate::mqtt_service::MqttService;
 
 /// Start the MQTT service
@@ -27,7 +30,7 @@ pub fn start_logging(mqtt_service: Arc<MqttService>, message: String) {
                 &mqtt_service_clone.config.log_topic,
                 &format!("{{\"level\": \"INFO\", \"message\": \"{}\"}}", message),
                 rumqttc::QoS::AtLeastOnce,
-                false,
+                    true,
             )
             .await;
     });
@@ -42,7 +45,7 @@ pub fn publish_analytics(mqtt_service: Arc<MqttService>, event: String, details:
                 &mqtt_service_clone.config.analytics_topic,
                 &format!("{{\"event\": \"{}\", \"details\": \"{}\"}}", event, details),
                 rumqttc::QoS::AtLeastOnce,
-                false,
+                true,
             )
             .await;
     });
@@ -63,11 +66,58 @@ pub fn publish_progress(mqtt_service: Arc<MqttService>, progress: u64, total: u6
                     (progress as f64 / total as f64) * 100.0
                 ),
                 rumqttc::QoS::AtLeastOnce,
-                false,
+                true,
             )
             .await;
     });
 }
+
+pub fn publish_directory_structure(
+    mqtt_service: Arc<MqttService>,
+    folder_path: String,
+    topic: String,
+) {
+    tokio::spawn(async move {
+        loop {
+            // Verzeichnis scannen
+            let directory_structure = scan_directory_structure(&folder_path);
+
+            // JSON-Payload erstellen
+            let payload = match directory_structure {
+                serde_json::Value::Array(_) => {
+                    // Erfolgreich gescannt
+                    serde_json::json!({
+                        "folder": folder_path,
+                        "structure": directory_structure
+                    })
+                        .to_string()
+                }
+                _ => {
+                    // Fehler beim Scannen
+                    error!(
+                        "Failed to scan directory structure at path: {}",
+                        folder_path
+                    );
+                    serde_json::json!({
+                        "folder": folder_path,
+                        "error": "Failed to scan directory"
+                    })
+                        .to_string()
+                }
+            };
+
+            // Nachricht veröffentlichen
+            mqtt_service.publish_message(&topic, &payload, rumqttc::QoS::AtLeastOnce, true).await;
+
+            // Informationen protokollieren
+            info!("Directory structure published to topic '{}'.", topic);
+
+            // Pause zwischen Iterationen
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    });
+}
+
 
 /// Publish uploader status with the MQTT service
 pub fn publish_status(mqtt_service: Arc<MqttService>, status: String, details: Option<String>) {
@@ -83,7 +133,7 @@ pub fn publish_status(mqtt_service: Arc<MqttService>, status: String, details: O
                     status, details_message
                 ),
                 rumqttc::QoS::AtLeastOnce,
-                false,
+                true,
             )
             .await;
     });
@@ -101,7 +151,7 @@ pub async fn handle_shutdown(mqtt_service: Arc<MqttService>) {
                 &status_topic,
                 "{\"status\": \"error\", \"message\": \"Termination signal failed\"}",
                 rumqttc::QoS::AtLeastOnce,
-                false,
+                true,
             )
             .await;
     } else {
@@ -110,7 +160,7 @@ pub async fn handle_shutdown(mqtt_service: Arc<MqttService>) {
                 &status_topic,
                 "{\"status\": \"shutdown\", \"message\": \"Uploader is shutting down...\"}",
                 rumqttc::QoS::AtLeastOnce,
-                false,
+                true,
             )
             .await;
 
@@ -128,7 +178,7 @@ pub fn periodic_status_update(mqtt_service: Arc<MqttService>) {
                     &topic,
                     "{\"status\": \"running\", \"message\": \"Uploader is operational\"}",
                     rumqttc::QoS::AtLeastOnce,
-                    false,
+                    true,
                 )
                 .await;
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;

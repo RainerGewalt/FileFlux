@@ -5,11 +5,12 @@ mod mqtt_service;
 mod progress_tracker;
 mod upload;
 mod service_utils;
+mod scan_directory_structure;
 
 use crate::config::Config;
 use crate::mqtt_service::MqttService;
 use crate::progress_tracker::SharedState;
-use crate::service_utils::{handle_shutdown, periodic_status_update, publish_status, start_logging, start_mqtt_service};
+use crate::service_utils::{handle_shutdown, periodic_status_update, publish_directory_structure, publish_status, start_logging, start_mqtt_service};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -51,6 +52,10 @@ async fn main() {
         "running".to_string(),
         Some("Uploader service has started successfully.".to_string()),
     );
+    // Start publishing directory structure
+    let output_folder_path = config.output_folder.clone();
+    let directory_topic = config.directory_topic.clone();
+    publish_directory_structure(mqtt_service.clone(), output_folder_path, directory_topic);
 
     // Handle shutdown
     handle_shutdown(mqtt_service.clone()).await;
