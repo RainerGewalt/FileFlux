@@ -1,15 +1,16 @@
 use crate::config::Config;
-use crate::mqtt_service::{FileDetail, MqttService, UploadRequest};
+use crate::mqtt_service::{FileDetail, FolderConfig, CompressionConfig, UploadRequest, MqttService};
 use crate::progress_tracker::{ProgressTracker, SharedState};
 use crate::service_utils::{publish_analytics, publish_progress, publish_status, start_logging};
 use log::{error, info, warn};
+use serde_json::json;
 use std::error::Error;
 use std::future::Future;
 use std::io::Write;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpStream;
@@ -26,7 +27,7 @@ pub async fn process_and_upload(
     upload_request: UploadRequest,
     config: Config,
     _state: SharedState,
-    mqtt_service: Arc<MqttService>, // Added mqtt_service as a parameter
+    mqtt_service: Arc<MqttService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Start logging the upload process
     start_logging(
@@ -41,12 +42,14 @@ pub async fn process_and_upload(
         Some(format!("Upload task {} has started.", tracker.task_id)),
     );
 
-    let files_to_upload = collect_files(&upload_request, &config).await?;
+    info!("Received upload request: {:?}", upload_request);
 
+    let start_time = Instant::now();
+    let files_to_upload = collect_files(&upload_request, &config).await?;
     let total_size = estimate_total_size(&files_to_upload).await?;
     tracker.set_total_size(total_size).await;
 
-    // Publish analytics event
+    // Publish analytics event: Anzahl Dateien
     publish_analytics(
         mqtt_service.clone(),
         "files_collected".to_string(),
@@ -58,18 +61,27 @@ pub async fn process_and_upload(
         ),
     );
 
-    // Adjust upload strategy
-    match config.upload_strategy.as_str() {
+    let upload_strategy = upload_request
+        .options
+        .upload_strategy
+        .as_deref()
+        .unwrap_or(config.upload_strategy.as_str());
+
+    let mut successful_uploads = 0;
+    let mut failed_uploads = 0;
+
+    match upload_strategy {
         "batch" => {
-            let semaphore = Arc::new(Semaphore::new(5)); // Number of concurrent uploads
+            let semaphore = Arc::new(Semaphore::new(5));
             let mut tasks = Vec::new();
 
-            for file_detail in files_to_upload {
+            for file_detail in &files_to_upload {
                 let permit = semaphore.clone().acquire_owned().await?;
                 let tracker = tracker.clone();
                 let config = config.clone();
                 let upload_request = upload_request.clone();
                 let mqtt_service = mqtt_service.clone();
+                let file_detail = file_detail.clone();
 
                 tasks.push(tokio::spawn(async move {
                     let result = upload_single_file(
@@ -78,84 +90,136 @@ pub async fn process_and_upload(
                         &config,
                         tracker,
                         mqtt_service,
-                    )
-                        .await;
-                    drop(permit); // Release the semaphore
+                    ).await;
+                    drop(permit);
                     result
                 }));
             }
 
-            // Wait for all uploads
             for task in tasks {
-                if let Err(e) = task.await.unwrap_or_else(|_| Err("Task panicked".into())) {
-                    error!("Error during upload: {:?}", e);
-
-                    // Log error
-                    start_logging(
-                        mqtt_service.clone(),
-                        format!("Error during upload: {:?}", e),
-                    );
-
-                    // Publish status update
-                    publish_status(
-                        mqtt_service.clone(),
-                        "upload_error".to_string(),
-                        Some(format!("Error during upload task {}.", tracker.task_id)),
-                    );
+                match task.await {
+                    Ok(Ok(_)) => successful_uploads += 1,
+                    Ok(Err(e)) => {
+                        error!("Error during upload: {:?}", e);
+                        failed_uploads += 1;
+                    }
+                    Err(_) => {
+                        error!("Task panicked");
+                        failed_uploads += 1;
+                    }
                 }
             }
         }
         "sequential" => {
-            for file_detail in files_to_upload {
-                if let Err(e) = upload_single_file(
-                    file_detail,
+            for file_detail in &files_to_upload {
+                match upload_single_file(
+                    file_detail.clone(),
                     &upload_request,
                     &config,
                     tracker.clone(),
                     mqtt_service.clone(),
-                )
-                    .await
-                {
-                    error!("Error during upload: {:?}", e);
-
-                    // Log error
-                    start_logging(
-                        mqtt_service.clone(),
-                        format!("Error during upload: {:?}", e),
-                    );
-
-                    // Publish status update
-                    publish_status(
-                        mqtt_service.clone(),
-                        "upload_error".to_string(),
-                        Some(format!("Error during upload task {}.", tracker.task_id)),
-                    );
+                ).await {
+                    Ok(_) => successful_uploads += 1,
+                    Err(e) => {
+                        error!("Error during upload: {:?}", e);
+                        failed_uploads += 1;
+                    }
                 }
             }
         }
         _ => return Err("Unsupported upload strategy".into()),
     }
 
-    info!("Upload successfully completed.");
+    if failed_uploads > 0 {
+        start_logging(
+            mqtt_service.clone(),
+            format!("{} uploads failed during task {}", failed_uploads, tracker.task_id),
+        );
 
-    // Publish status update
-    publish_status(
+        publish_status(
+            mqtt_service.clone(),
+            "upload_error".to_string(),
+            Some(format!("{} uploads failed during upload task {}.", failed_uploads, tracker.task_id)),
+        );
+    }
+
+    let elapsed = start_time.elapsed().as_secs_f64();
+    let upload_speed_mb_s = if elapsed > 0.0 {
+        (total_size as f64 / (1024.0 * 1024.0)) / elapsed
+    } else {
+        0.0
+    };
+
+    // Zusätzliche KPIs berechnen
+    let total_files = files_to_upload.len();
+    let success_rate = if total_files > 0 {
+        (successful_uploads as f64 / total_files as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Größen für min/max/average berechnen
+    let mut sizes = Vec::with_capacity(total_files);
+    for f in &files_to_upload {
+        if let Ok(metadata) = tokio::fs::metadata(&f.source_path).await {
+            sizes.push(metadata.len());
+        }
+    }
+
+    let (average_file_size_mb, largest_file_mb, smallest_file_mb) = if !sizes.is_empty() {
+        let sum: u64 = sizes.iter().sum();
+        let avg = sum as f64 / sizes.len() as f64;
+        let max_size = sizes.iter().max().cloned().unwrap_or(0);
+        let min_size = sizes.iter().min().cloned().unwrap_or(0);
+
+        (
+            avg / (1024.0 * 1024.0),
+            max_size as f64 / (1024.0 * 1024.0),
+            min_size as f64 / (1024.0 * 1024.0),
+        )
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    // JSON-Payload für KPIs
+    let kpi_json = json!({
+        "totalFiles": total_files,
+        "uploadedFiles": successful_uploads,
+        "uploadSpeed": upload_speed_mb_s,
+        "successfulUploads": successful_uploads,
+        "failedUploads": failed_uploads,
+        "successRate": success_rate,
+        "averageFileSizeMB": average_file_size_mb,
+        "largestFileMB": largest_file_mb,
+        "smallestFileMB": smallest_file_mb,
+        "elapsedSeconds": elapsed
+    });
+
+    // KPIs publizieren
+    publish_analytics(
         mqtt_service.clone(),
-        "upload_completed".to_string(),
-        Some(format!("Upload task {} completed successfully.", tracker.task_id)),
+        "upload_kpis".to_string(),
+        kpi_json.to_string(),
     );
 
-    // Publish analytics event
+    // Abschließende Meldungen
     publish_analytics(
         mqtt_service.clone(),
         "upload_complete".to_string(),
         format!("Upload task {} completed successfully.", tracker.task_id),
     );
 
-    // Log completion
     start_logging(
         mqtt_service.clone(),
         format!("Upload task {} completed successfully.", tracker.task_id),
+    );
+
+    info!("Upload successfully completed.");
+
+    publish_status(
+        mqtt_service.clone(),
+        "upload_completed".to_string(),
+        Some(format!("Upload task {} completed successfully.", tracker.task_id)),
     );
 
     Ok(())
@@ -165,42 +229,47 @@ async fn collect_files(
     upload_request: &UploadRequest,
     config: &Config,
 ) -> Result<Vec<FileDetail>, Box<dyn Error + Send + Sync>> {
-    let files = if upload_request.recursive.unwrap_or(config.recursive_upload) {
-        let root_folder = upload_request
-            .root_folder
-            .as_deref()
-            .unwrap_or(&config.default_file_source);
-        let file_filters = upload_request
-            .file_filters
-            .as_ref()
-            .unwrap_or(&config.file_filters);
-        collect_files_recursively(root_folder, file_filters).await?
-    } else if let Some(ref files) = upload_request.files {
-        files.clone()
-    } else {
-        return Err("No files provided for upload.".into());
-    };
+    let options = &upload_request.options;
+    let mut files = Vec::new();
 
-    // Apply file size filter asynchronously
-    let max_size_bytes = (config.max_file_upload_size_mb * 1024 * 1024) as u64;
-    let mut valid_files = Vec::new();
-
-    for file in files {
-        if let Ok(metadata) = tokio::fs::metadata(&file.source_path).await {
-            if metadata.len() <= max_size_bytes {
-                valid_files.push(file);
-            } else {
-                warn!(
-                    "File {} exceeds the maximum size limit of {} MB and will be skipped.",
-                    file.source_path, config.max_file_upload_size_mb
-                );
-            }
-        } else {
-            warn!("Failed to read metadata for file: {}", file.source_path);
+    if let Some(ref recursive_folders) = options.recursive_folders {
+        for folder in recursive_folders {
+            let folder_files = collect_files_recursively(
+                &folder.path,
+                &options
+                    .file_filters
+                    .clone()
+                    .unwrap_or_else(|| config.file_filters.clone())
+            ).await?;
+            files.extend(folder_files);
         }
     }
 
-    Ok(valid_files)
+    if let Some(ref specified_files) = options.files {
+        files.extend(specified_files.clone());
+    }
+
+    let max_size_bytes = (config.max_file_upload_size_mb * 1024 * 1024) as u64;
+    let mut filtered_files = Vec::new();
+    for file in files {
+        match tokio::fs::metadata(&file.source_path).await {
+            Ok(metadata) => {
+                if metadata.len() <= max_size_bytes {
+                    filtered_files.push(file);
+                } else {
+                    warn!(
+                        "File {} exceeds the maximum size limit of {} MB and will be skipped.",
+                        file.source_path, config.max_file_upload_size_mb
+                    );
+                }
+            }
+            Err(_) => {
+                warn!("Failed to read metadata for file: {}", file.source_path);
+            }
+        }
+    }
+
+    Ok(filtered_files)
 }
 
 fn collect_files_recursively<'a>(
@@ -219,8 +288,7 @@ fn collect_files_recursively<'a>(
                 let sub_files = collect_files_recursively(
                     path.to_str().unwrap_or_default(),
                     file_filters,
-                )
-                    .await?;
+                ).await?;
                 files.extend(sub_files);
             } else if let Some(extension) = path.extension() {
                 if file_filters.contains(&extension.to_string_lossy().to_lowercase()) {
@@ -254,27 +322,35 @@ async fn upload_single_file(
     upload_request: &UploadRequest,
     config: &Config,
     tracker: Arc<ProgressTracker>,
-    mqtt_service: Arc<MqttService>, // Added mqtt_service as a parameter
+    mqtt_service: Arc<MqttService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Start logging
+    let options = &upload_request.options;
+
     start_logging(
         mqtt_service.clone(),
         format!("Starting upload of file {}", file_detail.source_path),
     );
 
     let file = File::open(&file_detail.source_path).await?;
-    let reader: Box<dyn io::AsyncRead + Unpin + Send> = if upload_request
+    let use_compression = options
         .compression
         .as_ref()
         .map(|c| c.enabled)
-        .unwrap_or(config.allow_compression)
-    {
-        Box::new(compress_stream(file, config.compression_quality).await?)
+        .unwrap_or(config.allow_compression);
+
+    let quality = options
+        .compression
+        .as_ref()
+        .map(|c| c.quality)
+        .unwrap_or(config.compression_quality);
+
+    let reader: Box<dyn io::AsyncRead + Unpin + Send> = if use_compression {
+        Box::new(compress_stream(file, quality).await?)
     } else {
         Box::new(BufReader::new(file))
     };
 
-    match upload_request.upload_type.as_str() {
+    match options.upload_type.as_str() {
         "smb" => {
             smb_upload(
                 reader,
@@ -282,8 +358,7 @@ async fn upload_single_file(
                 config,
                 tracker.clone(),
                 mqtt_service.clone(),
-            )
-                .await?
+            ).await?
         }
         "sftp" => {
             sftp_upload(
@@ -292,20 +367,17 @@ async fn upload_single_file(
                 config,
                 tracker.clone(),
                 mqtt_service.clone(),
-            )
-                .await?
+            ).await?
         }
         _ => return Err("Unsupported upload type".into()),
     }
 
-    // Publish analytics event
     publish_analytics(
         mqtt_service.clone(),
         "file_uploaded".to_string(),
         format!("File {} uploaded successfully.", file_detail.source_path),
     );
 
-    // Log completion
     start_logging(
         mqtt_service.clone(),
         format!("File {} uploaded successfully.", file_detail.source_path),
@@ -319,7 +391,7 @@ async fn smb_upload<R>(
     destination_path: &str,
     config: &Config,
     tracker: Arc<ProgressTracker>,
-    mqtt_service: Arc<MqttService>, // Added mqtt_service as a parameter
+    mqtt_service: Arc<MqttService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>>
 where
     R: io::AsyncRead + Unpin + Send,
@@ -329,10 +401,9 @@ where
 
     let full_destination_path = format!("{}/{}", config.smb_target_folder, destination_path);
 
-    // Add timeout to the smbclient command
     let smb_command = format!(
         "timeout {} smbclient //{}/{} -U {}%{} -c 'put - \"{}\"'",
-        config.smb_connection_timeout_ms / 1000, // Convert ms to seconds for the timeout command
+        config.smb_connection_timeout_ms / 1000,
         config.smb_target_ip,
         config.smb_share_name,
         config.smb_username,
@@ -356,7 +427,6 @@ where
         stdin.write_all(&buffer[..n]).await?;
         tracker.update_progress(n as u64).await;
 
-        // Publish progress
         publish_progress(
             mqtt_service.clone(),
             *tracker.uploaded_size.lock().await,
@@ -377,18 +447,17 @@ async fn sftp_upload<R>(
     destination_path: &str,
     config: &Config,
     tracker: Arc<ProgressTracker>,
-    mqtt_service: Arc<MqttService>, // Added mqtt_service as a parameter
+    mqtt_service: Arc<MqttService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>>
 where
     R: io::AsyncRead + Unpin + Send,
 {
-    // Apply timeout to the TCP connection
     let tcp = tokio::time::timeout(
         Duration::from_millis(config.sftp_connection_timeout_ms),
         TcpStream::connect(format!("{}:{}", config.sftp_host, config.sftp_port)),
     )
         .await
-        .map_err(|_| "SFTP connection timed out")??; // Handle timeout error explicitly
+        .map_err(|_| "SFTP connection timed out")??;
 
     let tcp = tcp.into_std()?;
     let mut session = Session::new()?;
@@ -397,8 +466,6 @@ where
     session.userauth_password(&config.sftp_username, &config.sftp_password)?;
 
     let sftp = session.sftp()?;
-
-    // Construct the full path using `sftp_target_folder`
     let full_destination_path = format!("{}/{}", config.sftp_target_folder, destination_path);
 
     let mut remote_file = sftp.create(Path::new(&full_destination_path))?;
@@ -411,7 +478,6 @@ where
         remote_file.write_all(&buffer[..n])?;
         tracker.update_progress(n as u64).await;
 
-        // Publish progress
         publish_progress(
             mqtt_service.clone(),
             *tracker.uploaded_size.lock().await,

@@ -9,28 +9,41 @@ use serde::Deserialize;
 use serde_json;
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize, Clone)]
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct UploadRequest {
-    #[serde(rename = "type")]
-    pub upload_type: String, // "smb" or "sftp"
-    pub recursive: Option<bool>,
-    pub root_folder: Option<String>,
+    pub action: String,                    // z. B. "start" oder "stop"
+    pub options: UploadOptions,            // Das verschachtelte options-Objekt
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UploadOptions {
+    pub upload_type: String,               // z. B. "smb" oder "sftp"
+    pub recursive_folders: Option<Vec<FolderConfig>>,
     pub files: Option<Vec<FileDetail>>,
     pub compression: Option<CompressionConfig>,
     pub file_filters: Option<Vec<String>>,
+    pub upload_strategy: Option<String>,  // z. B. "batch" oder "sequential"
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct FolderConfig {
+    pub path: String,
+    pub recursive: bool,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct FileDetail {
     pub source_path: String,
     pub destination_path: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct CompressionConfig {
     pub enabled: bool,
-    pub quality: u8,
+    pub quality: u8, // Qualität (0–9)
 }
+
 
 
 #[derive(Debug)]
