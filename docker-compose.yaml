@@ -1,47 +1,53 @@
 version: '3.8'
 
 services:
-#  uploader:
-#    container_name: uploader-dev
-#    build:
-#      context: .
-#    environment:
-#      - MQTT_HOST=mqtt
-#      - MQTT_PORT=1883
-#      - MQTT_USERNAME=admin
-#      - MQTT_PASSWORD=secret
-#      - MQTT_ROOT_TOPIC=image_uploader
-#      - SFTP_HOST=sftp
-#      - SFTP_PORT=22
-#      - SFTP_USER=test
-#      - SFTP_PASSWORD=test
-#      - SFTP_REMOTE_DIR=/uploads
-#      - SMB_TARGET_IP=192.168.1.10
-#      - SMB_SHARE_NAME=default_share
-#      - SMB_TARGET_FOLDER=/upload_folder
-#      - DEFAULT_FILE_SOURCE=/data/uploads
-#    depends_on:
-#      - mqtt
-#      - sftp
-#    volumes:
-#      - ./upload_folder:/data/uploads
-#    ports:
-#      - "8080:8080" # Optional für Web-/API-Endpoints
-#    restart: unless-stopped
-#
-#  mqtt:
-#    container_name: mqtt-dev
-#    image: eclipse-mosquitto
-#    ports:
-#      - "1883:1883"
-#    volumes:
-#      - mosquitto_data:/mosquitto/data
-#      - mosquitto_log:/mosquitto/log
-#    environment:
-#      - MQTT_ALLOW_ANONYMOUS=false
-#      - MQTT_USERNAME=admin
-#      - MQTT_PASSWORD=secret
-#    restart: unless-stopped
+  uploader:
+    container_name: uploader-dev
+    build:
+      context: .
+    environment:
+      - RUST_LOG=info
+      - MQTT_HOST=mqtt
+      - MQTT_PORT=1883
+      - MQTT_USERNAME=
+      - MQTT_PASSWORD=
+      - MQTT_ROOT_TOPIC=image_uploader
+      - SFTP_HOST=sftp
+      - SFTP_PORT=22
+      - SFTP_USER=test
+      - SFTP_PASSWORD=test
+      - SFTP_REMOTE_DIR=/uploads
+      - SMB_TARGET_IP=192.168.1.10
+      - SMB_SHARE_NAME=default_share
+      - SMB_TARGET_FOLDER=/upload_folder
+      - DEFAULT_FILE_SOURCE=/data/uploads
+    depends_on:
+      - mqtt
+      - sftp
+    volumes:
+      - ./upload_folder:/data/uploads
+    ports:
+      - "8083:8080" # Optional für Web-/API-Endpoints
+    restart: no
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mqtt:
+    container_name: mqtt-dev
+    image: eclipse-mosquitto
+    ports:
+      - "1886:1883"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    environment:
+      - MQTT_ALLOW_ANONYMOUS=false
+      - MQTT_USERNAME=admin
+      - MQTT_PASSWORD=secret
+    restart: unless-stopped
 
   sftp:
     container_name: sftp-dev

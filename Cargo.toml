@@ -7,7 +7,7 @@ edition = "2021"
 serde = { version = "1.0.215", features = ["derive"] }
 thiserror = "2.0.3"
 dotenvy = "0.15"
-
+openssl = { version = "0.10", features = ["vendored"] }
 tokio = { version = "1", features = ["full"] }
 image = "0.25.5"
 tokio-retry = "0.3"
@@ -22,5 +22,5 @@ uuid = { version = "1.11.0", features = ["v4"] }
 serde_json = "1.0.133"
 async-compression = { version = "0.4.18", features = ["tokio", "gzip"] }
 
-ssh2 = "0.9.4"
+ssh2 = { version = "0.9.4", features = ["vendored-openssl"] }
 time = "0.3.36"
