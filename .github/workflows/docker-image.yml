@@ -1,0 +1,32 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - "main"
+      - "dev"
+  pull_request:
+    branches:
+      - "main"
+      - "dev"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-build-and-test:
+    name: Rust Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Build Rust project
+      - name: Build
+        run: cargo build --release --verbose
+
+      # Run tests
+      - name: Run Tests
+        run: cargo test --verbose
