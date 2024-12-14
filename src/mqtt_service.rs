@@ -13,18 +13,20 @@ use uuid::Uuid;
 #[derive(Deserialize, Debug, Clone)]
 pub struct UploadRequest {
     pub action: String,                    // z. B. "start" oder "stop"
-    pub options: UploadOptions,            // Das verschachtelte options-Objekt
+    pub options: Option<UploadOptions>,   // Optional, da "stop" keine Optionen benötigt
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct UploadOptions {
-    pub upload_type: String,               // z. B. "smb" oder "sftp"
+    pub upload_type: Option<String>,              // Optional für "stop"
+    pub task_id: Option<String>,                  // ID des zu stoppenden Tasks
     pub recursive_folders: Option<Vec<FolderConfig>>,
     pub files: Option<Vec<FileDetail>>,
     pub compression: Option<CompressionConfig>,
     pub file_filters: Option<Vec<String>>,
-    pub upload_strategy: Option<String>,  // z. B. "batch" oder "sequential"
+    pub upload_strategy: Option<String>,          // z. B. "batch" oder "sequential"
 }
+
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct FolderConfig {
@@ -235,9 +237,7 @@ impl MqttService {
     );
     }
 
-
     async fn handle_upload_command(self: Arc<Self>, payload: String) {
-        // Parse the JSON payload
         let upload_request: UploadRequest = match serde_json::from_str(&payload) {
             Ok(req) => req,
             Err(e) => {
@@ -248,34 +248,56 @@ impl MqttService {
 
         info!("Received upload request: {:?}", upload_request);
 
-        // Generate a unique identifier for the upload task
-        let upload_task_id = Uuid::new_v4().to_string();
+        match upload_request.action.as_str() {
+            "start" => {
+                if let Some(options) = upload_request.options {
+                    // Upload starten
+                    let upload_task_id = Uuid::new_v4().to_string();
+                    let tracker = Arc::new(ProgressTracker::new(
+                        1_000_000u64,
+                        self.clone(),
+                        upload_task_id.clone(),
+                    ));
 
-        // Create the ProgressTracker with self.clone()
-        let tracker = Arc::new(ProgressTracker::new(
-            1_000_000u64,
-            self.clone(), // Pass Arc<MqttService>
-            upload_task_id.clone(),
-        ));
+                    self.state.lock().await.insert(upload_task_id.clone(), tracker.clone());
 
-        // Store the tracker in shared state
-        self.state.lock().await.insert(upload_task_id.clone(), tracker.clone());
+                    let state_clone = self.state.clone();
+                    let config_clone = self.config.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = upload::process_and_upload(
+                            tracker,
+                            UploadRequest {
+                                action: upload_request.action,
+                                options: Some(options),
+                            },
+                            config_clone,
+                            state_clone,
+                            self.clone(),
+                        )
+                            .await
+                        {
+                            error!("Upload failed: {:?}", e);
+                        }
+                    });
+                } else {
+                    error!("UploadRequest options are missing for 'start' action.");
+                }
+            }"stop" => {
+                info!("Stopping all upload tasks...");
+                let mut state = self.state.lock().await;
 
-        let state_clone = self.state.clone();
-        let upload_request_clone = upload_request.clone();
-        let config_clone = self.config.clone();
-        tokio::spawn(async move {
-            if let Err(e) = upload::process_and_upload(
-                tracker,
-                upload_request_clone,
-                config_clone,
-                state_clone,
-                self.clone(),
-            )
-                .await
-            {
-                error!("Upload failed: {:?}", e);
+                let keys: Vec<String> = state.keys().cloned().collect();
+                for key in keys {
+                    if let Some(tracker) = state.remove(&key) {
+                        tracker.stop().await;
+                        info!("Successfully stopped upload task: {}", key);
+                    }
+                }
             }
-        });
+            _ => {
+                warn!("Unknown action received: {}", upload_request.action);
+            }
+        }
     }
+
 }

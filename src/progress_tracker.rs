@@ -4,6 +4,7 @@ use log::info;
 use std::fmt;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering}; // Import AtomicBool and Ordering
 use tokio::sync::Mutex;
 
 pub type SharedState = Arc<Mutex<HashMap<String, Arc<ProgressTracker>>>>;
@@ -13,6 +14,7 @@ pub struct ProgressTracker {
     pub(crate) uploaded_size: Mutex<u64>,
     mqtt_service: Arc<MqttService>,
     pub task_id: String,  // Make task_id public if needed elsewhere
+    pub cancelled: AtomicBool, // Add the cancelled field
 }
 
 impl ProgressTracker {
@@ -26,7 +28,22 @@ impl ProgressTracker {
             uploaded_size: Mutex::new(0),
             mqtt_service,
             task_id,
+            cancelled: AtomicBool::new(false), // Initialize as not cancelled
         }
+    }
+
+    /// Check if the task is cancelled
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Stop the progress tracker
+    pub async fn stop(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        info!("Progress tracker for task {} marked as stopped.", self.task_id);
+
+        // Optionally publish a progress update or a cancellation event
+        publish_progress(self.mqtt_service.clone(), 0, 0); // Example reset progress
     }
 
     pub async fn set_total_size(&self, size: u64) {
@@ -39,6 +56,11 @@ impl ProgressTracker {
     }
 
     pub async fn update_progress(&self, bytes_uploaded: u64) {
+        if self.is_cancelled() {
+            info!("Task {} has been cancelled. Skipping progress update.", self.task_id);
+            return;
+        }
+
         let mut uploaded_size = self.uploaded_size.lock().await;
         let total_size = *self.total_size.lock().await;
         *uploaded_size += bytes_uploaded;
@@ -70,6 +92,7 @@ impl fmt::Debug for ProgressTracker {
             .field("total_size", &"Mutex<u64>")
             .field("uploaded_size", &"Mutex<u64>")
             .field("task_id", &self.task_id)
+            .field("cancelled", &self.cancelled.load(Ordering::SeqCst)) // Include the cancellation status
             .finish()
     }
 }

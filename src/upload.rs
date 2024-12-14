@@ -1,5 +1,7 @@
+// Entferne ungenutzte Imports oder lass sie stehen wenn noch benötigt
+// use crate::mqtt_service::{CompressionConfig, FolderConfig}; // Nur wenn wirklich benutzt
+use crate::mqtt_service::{FileDetail, UploadRequest, MqttService};
 use crate::config::Config;
-use crate::mqtt_service::{FileDetail, FolderConfig, CompressionConfig, UploadRequest, MqttService};
 use crate::progress_tracker::{ProgressTracker, SharedState};
 use crate::service_utils::{publish_analytics, publish_progress, publish_status, start_logging};
 use log::{error, info, warn};
@@ -29,13 +31,11 @@ pub async fn process_and_upload(
     _state: SharedState,
     mqtt_service: Arc<MqttService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Start logging the upload process
     start_logging(
         mqtt_service.clone(),
         format!("Starting upload task {}", tracker.task_id),
     );
 
-    // Publish status update
     publish_status(
         mqtt_service.clone(),
         "upload_started".to_string(),
@@ -49,7 +49,6 @@ pub async fn process_and_upload(
     let total_size = estimate_total_size(&files_to_upload).await?;
     tracker.set_total_size(total_size).await;
 
-    // Publish analytics event: Anzahl Dateien
     publish_analytics(
         mqtt_service.clone(),
         "files_collected".to_string(),
@@ -61,11 +60,12 @@ pub async fn process_and_upload(
         ),
     );
 
-    let upload_strategy = upload_request
-        .options
-        .upload_strategy
-        .as_deref()
-        .unwrap_or(config.upload_strategy.as_str());
+    let upload_strategy = if let Some(options) = &upload_request.options {
+        options.upload_strategy.as_deref().unwrap_or(config.upload_strategy.as_str())
+    } else {
+        // Falls keine options vorhanden sind, nimm config oder gib einen Fehler zurück
+        config.upload_strategy.as_str()
+    };
 
     let mut successful_uploads = 0;
     let mut failed_uploads = 0;
@@ -150,7 +150,6 @@ pub async fn process_and_upload(
         0.0
     };
 
-    // Zusätzliche KPIs berechnen
     let total_files = files_to_upload.len();
     let success_rate = if total_files > 0 {
         (successful_uploads as f64 / total_files as f64) * 100.0
@@ -158,7 +157,6 @@ pub async fn process_and_upload(
         0.0
     };
 
-    // Größen für min/max/average berechnen
     let mut sizes = Vec::with_capacity(total_files);
     for f in &files_to_upload {
         if let Ok(metadata) = tokio::fs::metadata(&f.source_path).await {
@@ -181,7 +179,6 @@ pub async fn process_and_upload(
         (0.0, 0.0, 0.0)
     };
 
-    // JSON-Payload für KPIs
     let kpi_json = json!({
         "totalFiles": total_files,
         "uploadedFiles": successful_uploads,
@@ -195,14 +192,12 @@ pub async fn process_and_upload(
         "elapsedSeconds": elapsed
     });
 
-    // KPIs publizieren
     publish_analytics(
         mqtt_service.clone(),
         "upload_kpis".to_string(),
         kpi_json.to_string(),
     );
 
-    // Abschließende Meldungen
     publish_analytics(
         mqtt_service.clone(),
         "upload_complete".to_string(),
@@ -229,24 +224,32 @@ async fn collect_files(
     upload_request: &UploadRequest,
     config: &Config,
 ) -> Result<Vec<FileDetail>, Box<dyn Error + Send + Sync>> {
-    let options = &upload_request.options;
     let mut files = Vec::new();
 
-    if let Some(ref recursive_folders) = options.recursive_folders {
-        for folder in recursive_folders {
-            let folder_files = collect_files_recursively(
-                &folder.path,
-                &options
-                    .file_filters
-                    .clone()
-                    .unwrap_or_else(|| config.file_filters.clone())
-            ).await?;
-            files.extend(folder_files);
-        }
-    }
+    if let Some(options) = &upload_request.options {
+        // file_filters ableiten
+        let file_filters: Vec<String> = options
+            .file_filters
+            .clone()
+            .unwrap_or_else(|| config.file_filters.clone());
 
-    if let Some(ref specified_files) = options.files {
-        files.extend(specified_files.clone());
+        // recursive_folders verarbeiten
+        if let Some(ref recursive_folders) = options.recursive_folders {
+            for folder in recursive_folders {
+                let folder_files = collect_files_recursively(
+                    &folder.path,
+                    &file_filters
+                ).await?;
+                files.extend(folder_files);
+            }
+        }
+
+        // files verarbeiten
+        if let Some(ref specified_files) = options.files {
+            files.extend(specified_files.clone());
+        }
+    } else {
+        // Keine options vorhanden, vermutlich "stop"-Action => keine Dateien sammeln
     }
 
     let max_size_bytes = (config.max_file_upload_size_mb * 1024 * 1024) as u64;
@@ -275,9 +278,7 @@ async fn collect_files(
 fn collect_files_recursively<'a>(
     root_folder: &'a str,
     file_filters: &'a [String],
-) -> Pin<
-    Box<dyn Future<Output = Result<Vec<FileDetail>, Box<dyn Error + Send + Sync>>> + Send + 'a>,
-> {
+) -> Pin<Box<dyn Future<Output = Result<Vec<FileDetail>, Box<dyn Error + Send + Sync>>> + Send + 'a>> {
     Box::pin(async move {
         let mut files = Vec::new();
         let mut dir_entries = tokio::fs::read_dir(root_folder).await?;
@@ -324,7 +325,27 @@ async fn upload_single_file(
     tracker: Arc<ProgressTracker>,
     mqtt_service: Arc<MqttService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let options = &upload_request.options;
+    // compression & upload_type erst nach Prüfung auf Some(options)
+    let (use_compression, quality, upload_type) = if let Some(options) = &upload_request.options {
+        let use_compression = options
+            .compression
+            .as_ref()
+            .map(|c| c.enabled)
+            .unwrap_or(config.allow_compression);
+
+        let quality = options
+            .compression
+            .as_ref()
+            .map(|c| c.quality)
+            .unwrap_or(config.compression_quality);
+
+        let upload_type = options.upload_type.as_deref().unwrap_or("smb");
+        (use_compression, quality, upload_type)
+    } else {
+        // Default-Werte, falls keine Optionen vorhanden sind (z. B. stop?)
+        // bei stop wird kein upload ausgeführt, könnte also Fehler sein
+        (config.allow_compression, config.compression_quality, "smb")
+    };
 
     start_logging(
         mqtt_service.clone(),
@@ -332,25 +353,13 @@ async fn upload_single_file(
     );
 
     let file = File::open(&file_detail.source_path).await?;
-    let use_compression = options
-        .compression
-        .as_ref()
-        .map(|c| c.enabled)
-        .unwrap_or(config.allow_compression);
-
-    let quality = options
-        .compression
-        .as_ref()
-        .map(|c| c.quality)
-        .unwrap_or(config.compression_quality);
-
     let reader: Box<dyn io::AsyncRead + Unpin + Send> = if use_compression {
         Box::new(compress_stream(file, quality).await?)
     } else {
         Box::new(BufReader::new(file))
     };
 
-    match options.upload_type.as_str() {
+    match upload_type {
         "smb" => {
             smb_upload(
                 reader,
@@ -460,7 +469,7 @@ where
         .map_err(|_| "SFTP connection timed out")??;
 
     let tcp = tcp.into_std()?;
-    let mut session = Session::new()?;
+    let mut session = ssh2::Session::new()?;
     session.set_tcp_stream(tcp);
     session.handshake()?;
     session.userauth_password(&config.sftp_username, &config.sftp_password)?;

@@ -3,7 +3,8 @@
 ## Example Message Format
 
 This project supports SMB and SFTP uploads using a unified message structure in JSON format. Below is an example of the message structure:
-
+MVP: Manual upload + Worker Installation/Managing + Analytics
+v2.0: Eventdriven
 ```json
 {
   "type": "smb",                  // "smb" or "sftp"
