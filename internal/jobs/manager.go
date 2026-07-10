@@ -78,19 +78,19 @@ func (m *Manager) Handle(payload []byte) {
 
 	if dec := m.pol.Evaluate(cmd); !dec.Allowed {
 		m.log.Warn("command rejected by policy", "job_id", cmd.JobID, "reason", dec.Reason, "detail", dec.Detail)
-		m.reject(cmd.JobID, dec.Reason, dec.Detail, cmdHash)
+		m.reject(cmd.JobID, dec.Reason, dec.Detail, cmdHash, issuerFor(cmd))
 		return
 	}
 
 	m.mu.Lock()
 	if _, dup := m.seen[cmd.JobID]; dup {
 		m.mu.Unlock()
-		m.reject(cmd.JobID, "duplicate_job_id", "job_id already processed", cmdHash)
+		m.reject(cmd.JobID, "duplicate_job_id", "job_id already processed", cmdHash, issuerFor(cmd))
 		return
 	}
 	if m.running >= m.pol.MaxParallelJobs {
 		m.mu.Unlock()
-		m.reject(cmd.JobID, "too_many_jobs", fmt.Sprintf("max_parallel_jobs (%d) reached", m.pol.MaxParallelJobs), cmdHash)
+		m.reject(cmd.JobID, "too_many_jobs", fmt.Sprintf("max_parallel_jobs (%d) reached", m.pol.MaxParallelJobs), cmdHash, issuerFor(cmd))
 		return
 	}
 	m.seen[cmd.JobID] = struct{}{}
@@ -117,10 +117,10 @@ func (m *Manager) handleSchemaError(payload []byte, err error) {
 		PolicyVersion: m.pol.PolicyVersion,
 		PolicyHash:    m.pol.Hash,
 		CommandHash:   cmdHash,
-	})
+	}, nil)
 }
 
-func (m *Manager) reject(jobID, reason, detail, cmdHash string) {
+func (m *Manager) reject(jobID, reason, detail, cmdHash string, issuer *evidence.Issuer) {
 	m.pub.Status(jobID, "rejected", detail)
 	m.pub.Result(events.ResultEvent{
 		JobID:         jobID,
@@ -130,7 +130,15 @@ func (m *Manager) reject(jobID, reason, detail, cmdHash string) {
 		PolicyVersion: m.pol.PolicyVersion,
 		PolicyHash:    m.pol.Hash,
 		CommandHash:   cmdHash,
-	})
+	}, issuer)
+}
+
+// issuerFor derives the evidence issuer from a command's self-declared operator.
+func issuerFor(c *commands.Command) *evidence.Issuer {
+	if c != nil && c.Operator != "" {
+		return &evidence.Issuer{Auth: "self-declared", Identity: c.Operator}
+	}
+	return &evidence.Issuer{Auth: "none"}
 }
 
 func (m *Manager) run(c *commands.Command, cmdHash string) {
@@ -186,6 +194,7 @@ func (m *Manager) run(c *commands.Command, cmdHash string) {
 		Source:           c.Source,
 		Target:           c.Target,
 		Status:           status,
+		Justification:    c.Reason,
 		StartedAt:        started.UTC().Format(time.RFC3339),
 		FinishedAt:       finished.UTC().Format(time.RFC3339),
 		DurationMS:       finished.Sub(started).Milliseconds(),
@@ -201,7 +210,7 @@ func (m *Manager) run(c *commands.Command, cmdHash string) {
 	if runErr != nil && len(res.Errors) == 0 {
 		res.Errors = []string{logging.Redact(runErr.Error())}
 	}
-	m.pub.Result(res)
+	m.pub.Result(res, issuerFor(c))
 	m.pub.Status(c.JobID, status, "")
 }
 

@@ -24,7 +24,7 @@ mosquitto_pub  -h localhost -p 1883 -t trailtransfer/worker-01/commands \
 jobs/job-001/status   {"status":"accepted"}
 jobs/job-001/status   {"status":"started"}
 jobs/job-001/logs     {"level":"INFO","message":"starting copy /data/input -> minio-demo:trailtransfer (dry_run=true)"}
-jobs/job-001/result   {"status":"completed", ... "command_hash":"sha256:…","result_hash":"sha256:…"}
+jobs/job-001/result   {"seq":7,"prev_hash":"sha256:…","payload":{"status":"completed",...,"command_hash":"sha256:…"},"content_hash":"sha256:…","chain_hash":"sha256:…"}
 jobs/job-001/status   {"status":"completed"}
 ```
 

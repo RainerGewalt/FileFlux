@@ -29,6 +29,11 @@ type Config struct {
 	RcloneConfig string `yaml:"rclone_config"`
 	RcloneBinary string `yaml:"rclone_binary"`
 
+	// EvidenceJournal is the append-only journal path. Empty = in-memory chain
+	// only (resets on restart); set a path on a writable/WORM volume for durable,
+	// recoverable evidence.
+	EvidenceJournal string `yaml:"evidence_journal"`
+
 	MaxParallelJobs       int    `yaml:"max_parallel_jobs"`
 	HealthIntervalSeconds int    `yaml:"health_interval_seconds"`
 	LogLevel              string `yaml:"log_level"`
@@ -80,6 +85,7 @@ func (c *Config) applyEnv() {
 	setStr(&c.PolicyFile, "TRAILTRANSFER_POLICY_FILE")
 	setStr(&c.RcloneConfig, "TRAILTRANSFER_RCLONE_CONFIG")
 	setStr(&c.RcloneBinary, "TRAILTRANSFER_RCLONE_BINARY")
+	setStr(&c.EvidenceJournal, "TRAILTRANSFER_EVIDENCE_JOURNAL")
 	setInt(&c.MaxParallelJobs, "TRAILTRANSFER_MAX_PARALLEL_JOBS")
 	setInt(&c.HealthIntervalSeconds, "TRAILTRANSFER_HEALTH_INTERVAL_SECONDS")
 	setStr(&c.LogLevel, "TRAILTRANSFER_LOG_LEVEL")

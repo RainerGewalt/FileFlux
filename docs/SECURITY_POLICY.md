@@ -20,8 +20,9 @@ surface is the **incoming MQTT commands**, treated as untrusted.
 - Destructive `sync`/`delete` off unless explicitly enabled in policy.
 - No secrets in logs, events or errors — credentials live only in an
   operator-provided, read-only `rclone.conf`; error output is redacted.
-- `policy_version` **and** `policy_hash` in every result; `command_hash` /
-  `result_hash` back the audit trail.
+- `policy_version` **and** `policy_hash` in every result; `command_hash` +
+  a JCS `content_hash`/`chain_hash` chain back a verifiable audit trail
+  (`trailtransfer verify`).
 
 ## Safe rclone execution
 

@@ -47,6 +47,7 @@ type ResultEvent struct {
 	Status           string   `json:"status"`
 	Reason           string   `json:"reason,omitempty"`
 	Detail           string   `json:"detail,omitempty"`
+	Justification    string   `json:"justification,omitempty"` // human "why", from command.reason
 	StartedAt        string   `json:"started_at,omitempty"`
 	FinishedAt       string   `json:"finished_at,omitempty"`
 	DurationMS       int64    `json:"duration_ms,omitempty"`
@@ -59,7 +60,6 @@ type ResultEvent struct {
 	PolicyHash       string   `json:"policy_hash,omitempty"`
 	WorkerVersion    string   `json:"worker_version"`
 	CommandHash      string   `json:"command_hash,omitempty"`
-	ResultHash       string   `json:"result_hash,omitempty"`
 }
 
 // LogEvent is a single job-scoped log line.
@@ -90,13 +90,15 @@ type HealthEvent struct {
 
 // CapabilitiesEvent is the retained description of what the worker can do.
 type CapabilitiesEvent struct {
-	EventType        string   `json:"event_type"`
-	WorkerID         string   `json:"worker_id"`
-	Version          string   `json:"version"`
-	SupportedActions []string `json:"supported_actions"`
-	MaxParallelJobs  int      `json:"max_parallel_jobs"`
-	RcloneAvailable  bool     `json:"rclone_available"`
-	PolicyVersion    string   `json:"policy_version"`
-	PolicyHash       string   `json:"policy_hash,omitempty"`
-	Timestamp        string   `json:"timestamp"`
+	EventType             string   `json:"event_type"`
+	WorkerID              string   `json:"worker_id"`
+	Version               string   `json:"version"`
+	SupportedActions      []string `json:"supported_actions"`
+	MaxParallelJobs       int      `json:"max_parallel_jobs"`
+	RcloneAvailable       bool     `json:"rclone_available"`
+	EvidenceSchemaVersion string   `json:"evidence_schema_version"`
+	EvidenceJournal       bool     `json:"evidence_journal"`
+	PolicyVersion         string   `json:"policy_version"`
+	PolicyHash            string   `json:"policy_hash,omitempty"`
+	Timestamp             string   `json:"timestamp"`
 }

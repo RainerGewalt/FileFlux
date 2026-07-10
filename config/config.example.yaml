@@ -15,6 +15,9 @@ policy_file: /config/worker-policy.yaml
 rclone_config: /config/rclone.conf
 rclone_binary: rclone
 
+# Append-only evidence journal (JSONL). Empty = in-memory chain only.
+evidence_journal: /data/evidence/journal.jsonl
+
 max_parallel_jobs: 2
 health_interval_seconds: 30
 log_level: info

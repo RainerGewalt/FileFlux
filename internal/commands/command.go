@@ -46,4 +46,10 @@ type Command struct {
 	Filters     []string `json:"filters,omitempty"`
 	DryRun      *bool    `json:"dry_run,omitempty"`
 	TargetJobID string   `json:"target_job_id,omitempty"` // for cancel/status
+
+	// Attribution (optional, recorded in evidence). Operator is self-declared —
+	// strong identity is a broker/governance concern. Reason is a human
+	// justification for the job.
+	Operator string `json:"operator,omitempty"`
+	Reason   string `json:"reason,omitempty"`
 }

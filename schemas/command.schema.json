@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RainerGewalt/trailtransfer/schemas/command.schema.json",
+  "title": "TrailTransfer command",
+  "description": "A command published to trailtransfer/{worker_id}/commands. The schema is closed: no additional properties are allowed (no free-form rclone args).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "action"],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Client-supplied unique job id. Required; deduplicated by the worker."
+    },
+    "action": {
+      "type": "string",
+      "enum": ["copy", "move", "sync", "check", "cancel", "status"]
+    },
+    "source": {
+      "type": "string",
+      "description": "Source path; must sit under an allowed_sources root. Required for copy/move/sync/check."
+    },
+    "target": {
+      "type": "string",
+      "description": "rclone remote/path (alias:path); must be in allowed_targets. Required for copy/move/sync/check."
+    },
+    "recursive": {
+      "type": "boolean",
+      "description": "Default true. When false, rclone runs with --max-depth 1."
+    },
+    "filters": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Glob patterns mapped to rclone --include (validated; may not start with '-')."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "When absent, the policy's dry_run_default applies."
+    },
+    "target_job_id": {
+      "type": "string",
+      "description": "The job to act on. Required for action=cancel and action=status."
+    },
+    "operator": {
+      "type": "string",
+      "description": "Optional self-declared issuer identity, recorded in evidence."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Optional human justification, recorded as result.justification."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "enum": ["copy", "move", "sync", "check"] } } },
+      "then": { "required": ["source", "target"] }
+    },
+    {
+      "if": { "properties": { "action": { "enum": ["cancel", "status"] } } },
+      "then": { "required": ["target_job_id"] }
+    }
+  ]
+}

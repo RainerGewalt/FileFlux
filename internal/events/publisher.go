@@ -17,14 +17,16 @@ type MQTT interface {
 // Publisher stamps worker identity/version/timestamps onto events and routes
 // each to its topic with the right QoS and retention.
 type Publisher struct {
-	mq  MQTT
-	cfg *config.Config
-	ver string
+	mq     MQTT
+	cfg    *config.Config
+	ver    string
+	sealer *evidence.Sealer
 }
 
-// NewPublisher builds a publisher bound to a client, config and worker version.
-func NewPublisher(mq MQTT, cfg *config.Config, ver string) *Publisher {
-	return &Publisher{mq: mq, cfg: cfg, ver: ver}
+// NewPublisher builds a publisher bound to a client, config, worker version and
+// the evidence sealer used to chain-link and journal result records.
+func NewPublisher(mq MQTT, cfg *config.Config, ver string, sealer *evidence.Sealer) *Publisher {
+	return &Publisher{mq: mq, cfg: cfg, ver: ver, sealer: sealer}
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
@@ -59,19 +61,23 @@ func (p *Publisher) Log(jobID, level, msg string) {
 	})
 }
 
-// Result finalises worker identity/version and the result hash, then publishes
-// the receipt (QoS 1). The caller fills the semantic fields.
-func (p *Publisher) Result(r ResultEvent) {
+// Result finalises worker identity/version, seals the record into the evidence
+// hash chain (and journal), then publishes the sealed envelope (QoS 1). The
+// caller fills the semantic fields; issuer records who caused it.
+func (p *Publisher) Result(r ResultEvent, issuer *evidence.Issuer) {
 	r.EventType = TypeResult
 	r.WorkerID = p.cfg.WorkerID
 	r.WorkerVersion = p.ver
 	if r.Errors == nil {
 		r.Errors = []string{}
 	}
-	if h, err := evidence.Hash(r); err == nil { // r.ResultHash still empty here
-		r.ResultHash = h
+	env, err := p.sealer.Seal(TypeResult, r, issuer)
+	if err != nil {
+		// Never drop a result: fall back to the unsealed payload.
+		p.send(p.cfg.JobResultTopic(r.JobID), 1, false, r)
+		return
 	}
-	p.send(p.cfg.JobResultTopic(r.JobID), 1, false, r)
+	_ = p.mq.Publish(p.cfg.JobResultTopic(r.JobID), 1, false, env)
 }
 
 // Health publishes the retained heartbeat (QoS 1, retained).

@@ -21,6 +21,7 @@ import (
 
 	"github.com/RainerGewalt/trailtransfer/internal/config"
 	"github.com/RainerGewalt/trailtransfer/internal/events"
+	"github.com/RainerGewalt/trailtransfer/internal/evidence"
 	"github.com/RainerGewalt/trailtransfer/internal/health"
 	"github.com/RainerGewalt/trailtransfer/internal/jobs"
 	"github.com/RainerGewalt/trailtransfer/internal/logging"
@@ -42,6 +43,8 @@ func main() {
 		cmdValidateConfig(os.Args[2:])
 	case "print-capabilities":
 		cmdPrintCapabilities(os.Args[2:])
+	case "verify":
+		cmdVerify(os.Args[2:])
 	case "version":
 		fmt.Println(version.String())
 	case "-h", "--help", "help":
@@ -60,6 +63,7 @@ Commands:
   run                 start the worker
   validate-config     load config + policy, report validity, exit 0/1
   print-capabilities  print the capabilities event as JSON
+  verify <journal>    independently verify an evidence journal, exit 0/1
   version             print the worker version
 
 Flags (run/validate-config/print-capabilities):
@@ -85,6 +89,17 @@ func cmdRun(args []string) {
 		log.Warn("rclone binary not found — transfer jobs will fail until it is on PATH", "binary", cfg.RcloneBinary)
 	}
 
+	sealer, err := evidence.NewSealer(cfg.WorkerID, cfg.EvidenceJournal)
+	if err != nil {
+		fatal(fmt.Errorf("evidence journal: %w", err))
+	}
+	defer sealer.Close()
+	if sealer.JournalEnabled() {
+		log.Info("evidence journal enabled", "path", cfg.EvidenceJournal)
+	} else {
+		log.Warn("evidence journal disabled — hash chain is in-memory only; set TRAILTRANSFER_EVIDENCE_JOURNAL for durable, recoverable evidence")
+	}
+
 	lwt, _ := json.Marshal(events.HealthEvent{
 		EventType: events.TypeHealth,
 		Status:    "offline",
@@ -102,15 +117,17 @@ func cmdRun(args []string) {
 		LWTPayload: lwt,
 	})
 
-	pub := events.NewPublisher(client, cfg, version.String())
+	pub := events.NewPublisher(client, cfg, version.String(), sealer)
 	mgr := jobs.NewManager(pol, pub, runner, log)
 
 	caps := events.CapabilitiesEvent{
-		SupportedActions: mgr.SupportedActions(),
-		MaxParallelJobs:  pol.MaxParallelJobs,
-		RcloneAvailable:  rclone.Available(cfg.RcloneBinary),
-		PolicyVersion:    pol.PolicyVersion,
-		PolicyHash:       pol.Hash,
+		SupportedActions:      mgr.SupportedActions(),
+		MaxParallelJobs:       pol.MaxParallelJobs,
+		RcloneAvailable:       rclone.Available(cfg.RcloneBinary),
+		EvidenceSchemaVersion: evidence.SchemaVersion,
+		EvidenceJournal:       sealer.JournalEnabled(),
+		PolicyVersion:         pol.PolicyVersion,
+		PolicyHash:            pol.Hash,
 	}
 
 	client.OnConnect(func(c *mqtt.Client) {
@@ -163,18 +180,47 @@ func cmdPrintCapabilities(args []string) {
 		fatal(err)
 	}
 	caps := events.CapabilitiesEvent{
-		EventType:        events.TypeCapabilities,
-		WorkerID:         cfg.WorkerID,
-		Version:          version.String(),
-		SupportedActions: pol.SupportedActions(),
-		MaxParallelJobs:  pol.MaxParallelJobs,
-		RcloneAvailable:  rclone.Available(cfg.RcloneBinary),
-		PolicyVersion:    pol.PolicyVersion,
-		PolicyHash:       pol.Hash,
-		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		EventType:             events.TypeCapabilities,
+		WorkerID:              cfg.WorkerID,
+		Version:               version.String(),
+		SupportedActions:      pol.SupportedActions(),
+		MaxParallelJobs:       pol.MaxParallelJobs,
+		RcloneAvailable:       rclone.Available(cfg.RcloneBinary),
+		EvidenceSchemaVersion: evidence.SchemaVersion,
+		EvidenceJournal:       cfg.EvidenceJournal != "",
+		PolicyVersion:         pol.PolicyVersion,
+		PolicyHash:            pol.Hash,
+		Timestamp:             time.Now().UTC().Format(time.RFC3339),
 	}
 	b, _ := json.MarshalIndent(caps, "", "  ")
 	fmt.Println(string(b))
+}
+
+func cmdVerify(args []string) {
+	fs := flag.NewFlagSet("verify", flag.ExitOnError)
+	journal := fs.String("journal", "", "path to the evidence journal (JSONL)")
+	_ = fs.Parse(args)
+	path := *journal
+	if path == "" && fs.NArg() > 0 {
+		path = fs.Arg(0)
+	}
+	if path == "" {
+		fmt.Fprintln(os.Stderr, "usage: trailtransfer verify <journal-path>")
+		os.Exit(2)
+	}
+	rep, err := evidence.Verify(path)
+	if err != nil {
+		fatal(err)
+	}
+	if rep.OK {
+		fmt.Printf("OK: %d record(s), hash chain intact\n", rep.Entries)
+		return
+	}
+	fmt.Printf("FAIL: %d record(s) checked\n", rep.Entries)
+	for _, f := range rep.Failures {
+		fmt.Println("  - " + f)
+	}
+	os.Exit(1)
 }
 
 func parseConfigFlag(name string, args []string) string {

@@ -18,8 +18,14 @@ MQTT command in
   → policy validation
   → controlled rclone execution (argv, never a shell)
   → progress / status / result out
-  → evidence event for audit
+  → sealed, hash-chained evidence record  →  trailtransfer verify
 ```
+
+Every finished job (success **or** rejection) is sealed into a tamper-evident,
+append-only journal and can be **independently verified** — no database, no
+cloud, no TrailMQ. This is what makes it *audit-ready* and a building block for
+ALCOA++/GxP-style data integrity (see [`docs/EVIDENCE_MODEL.md`](docs/EVIDENCE_MODEL.md)
+and [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md)).
 
 ## What it is / is not
 
@@ -46,7 +52,8 @@ mosquitto_pub  -h localhost -p 1883 \
 ```
 
 You'll see `accepted → started → … → completed` on the job's topics, ending in a
-`result` event that carries `command_hash`, `result_hash`, `policy_version` and
+sealed **result envelope** (`seq`, `prev_hash`, `content_hash`, `chain_hash`)
+whose `payload` carries `command_hash`, `policy_version`, `policy_hash` and
 `worker_version`.
 
 > `examples/commands/copy.json` targets MinIO (bucket created by the compose
@@ -72,31 +79,34 @@ You'll see `accepted → started → … → completed` on the job's topics, end
 Actions: `copy` · `move` · `sync` · `check` · `cancel` · `status`. There is
 deliberately **no** `args`/`flags`/`extra` field — unknown fields are rejected.
 
-## Example result event (evidence)
+## Example result event (sealed evidence envelope)
+
+The result is wrapped in a tamper-evident envelope and chained to the previous
+record (full model in [`docs/EVIDENCE_MODEL.md`](docs/EVIDENCE_MODEL.md); sample
+in [`examples/events/result.completed.json`](examples/events/result.completed.json)):
 
 ```json
 {
-  "event_type": "result",
-  "job_id": "job-001",
+  "schema_version": "1",
   "worker_id": "worker-01",
-  "action": "copy",
-  "source": "/data/input",
-  "target": "minio-demo:trailtransfer",
-  "status": "completed",
-  "started_at": "2026-01-01T10:00:00Z",
-  "finished_at": "2026-01-01T10:00:12Z",
-  "duration_ms": 12000,
-  "files_total": 10,
-  "files_transferred": 10,
-  "bytes_transferred": 12345678,
-  "errors": [],
-  "rclone_exit_code": 0,
-  "policy_version": "1",
-  "worker_version": "0.1.0",
-  "command_hash": "sha256:…",
-  "result_hash": "sha256:…"
+  "seq": 7,
+  "prev_hash": "sha256:…",
+  "event_type": "result",
+  "recorded_at": "2026-01-01T10:00:12.5Z",
+  "time_source": "system",
+  "issuer": { "auth": "self-declared", "identity": "alice" },
+  "payload": {
+    "action": "copy", "source": "/data/input", "target": "minio-demo:trailtransfer",
+    "status": "completed", "files_transferred": 10, "bytes_transferred": 12345678,
+    "rclone_exit_code": 0, "policy_version": "1", "policy_hash": "sha256:…",
+    "worker_version": "0.2.0", "command_hash": "sha256:…"
+  },
+  "content_hash": "sha256:…",
+  "chain_hash": "sha256:…"
 }
 ```
+
+Verify a whole journal independently: `trailtransfer verify /data/evidence/journal.jsonl`.
 
 ## Worker policy — the security boundary
 
@@ -145,6 +155,7 @@ Job lifecycle: `received → rejected` (schema/policy) **or**
 trailtransfer run [--config config.yaml]     # start the worker
 trailtransfer validate-config [--config …]   # load config+policy, exit 0/1
 trailtransfer print-capabilities [--config …]# print the capabilities JSON
+trailtransfer verify <journal>               # independently verify the evidence chain, exit 0/1
 trailtransfer version
 ```
 
@@ -159,7 +170,7 @@ A YAML config is optional; `TRAILTRANSFER_*` env vars override it (see
 MQTT commands are untrusted; the local policy is authoritative. No shell
 execution, no arbitrary rclone flags, no secrets in logs, no unrestricted
 paths/remotes. Duplicate `job_id`s are deduplicated; `max_parallel_jobs` bounds
-concurrency; `command_hash`/`result_hash` back the audit trail. See
+concurrency; a JCS hash chain (`content_hash`/`chain_hash`) backs a verifiable audit trail. See
 [`SECURITY.md`](SECURITY.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## TrailMQ integration
@@ -184,12 +195,15 @@ go test ./...
 
 ## Roadmap
 
-- **v0.1** — MQTT worker, `copy/move/check` + `cancel/status`, policy validation,
-  rclone execution, status/result + canonical hashes, health/capabilities,
-  Docker Compose demo. *(this)*
-- **v0.2** — live progress, retries, dead-letter events, metrics, more tests.
-- **v0.3** — evidence manifest, signed events, TrailMQ example contracts.
-- **v1.0** — stable schemas, hardened image, full CI, deployment guide.
+- **v0.1** — MQTT worker, `copy/move/sync/check` + `cancel/status`, policy
+  validation, safe rclone execution, status/result events, health/capabilities,
+  Docker Compose demo.
+- **v0.2** — audit evidence: RFC 8785 (JCS) hashing, sealed envelope with
+  `seq`/`prev_hash` **hash chain**, append-only journal, `trailtransfer verify`,
+  issuer/justification capture, JSON Schemas. *(this)*
+- **v0.3** — Ed25519 signatures, RFC 3161 timestamps, file manifest, WORM export,
+  live progress, retries.
+- **v1.0** — stable schemas, hardened image, full CI, deployment/validation guide.
 
 ## License
 

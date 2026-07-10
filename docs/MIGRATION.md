@@ -23,7 +23,7 @@ build path (no CI, no Docker stage builds them).
 | Policy | none | `worker-policy.yaml` — the security boundary |
 | Concurrency | file-level only | `max_parallel_jobs` at job level |
 | rclone.conf | generated from SMB/SFTP env | operator-provided, read-only, never logged |
-| Result event | camelCase, ad-hoc | snake_case, `command_hash`/`result_hash`/`policy_hash` |
+| Result event | camelCase, ad-hoc | sealed JCS envelope: `seq`/`prev_hash` chain, `content_hash`, `command_hash`, `policy_hash` |
 | Topics prefix | `image_uploader` (configurable) | `trailtransfer` |
 | Env prefix | mixed (`MQTT_*`, `SMB_*`, `SFTP_*`) | `TRAILTRANSFER_*` |
 

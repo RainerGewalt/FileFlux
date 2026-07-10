@@ -18,10 +18,12 @@ services:
       TRAILTRANSFER_MQTT_PORT: "1883"
       TRAILTRANSFER_POLICY_FILE: /config/worker-policy.example.yaml
       TRAILTRANSFER_RCLONE_CONFIG: /config/rclone.conf.example
+      TRAILTRANSFER_EVIDENCE_JOURNAL: /data/evidence/journal.jsonl
       TRAILTRANSFER_LOG_LEVEL: info
     volumes:
       - ./config:/config:ro            # worker-policy + rclone.conf
       - ./upload_folder:/data/input:ro # sample source files
+      - ./evidence:/data/evidence      # writable: append-only evidence journal
     restart: unless-stopped
 
   mqtt:

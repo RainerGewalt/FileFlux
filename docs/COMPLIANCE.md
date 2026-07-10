@@ -1,0 +1,64 @@
+# Compliance & Data Integrity
+
+> **Honest scope.** TrailTransfer is open-source software. Software cannot *be*
+> "GMP compliant" or "Part 11 certified" on its own — compliance is a property of
+> a *validated system in a controlled process*. TrailTransfer is **designed to
+> support** data integrity (ALCOA++) and to be **validatable** by the operator.
+> It makes no certification claim. This page maps features to expectations and
+> states clearly what the operator must provide.
+
+## ALCOA++ mapping
+
+| Principle | How TrailTransfer supports it |
+|---|---|
+| **Attributable** | `worker_id`, `command_hash`, and a self-declared `issuer` (command `operator`); strong identity via broker ACL/mTLS (operator) |
+| **Legible** | structured JSON, `schema_version`, published JSON Schemas (`schemas/`) |
+| **Contemporaneous** | `recorded_at` (ISO 8601 UTC) at seal time; `time_source` declared; NTP is operator responsibility (ISO 27001 8.17) |
+| **Original** | the sealed journal record is the original; hashes fix its content |
+| **Accurate** | `rclone_exit_code`, transfer counters, captured errors; optional file manifest (v0.3) |
+| **Complete** | completed **and** rejected jobs are recorded; journal + fsync; store-and-forward planned |
+| **Consistent** | monotonic `seq` + `prev_hash` hash chain (chronological, gap-detecting) |
+| **Enduring** | append-only journal on a durable/WORM volume; chain recovered on restart |
+| **Available** | `trailtransfer verify` + the plain-text journal; readable without any service |
+| **Traceable** | chain of custody: issuer → policy (`policy_hash`) → execution → sealed result |
+
+## EU GMP Annex 11 / 21 CFR Part 11 (indicative)
+
+| Expectation | TrailTransfer | Operator provides |
+|---|---|---|
+| Audit trail: secure, time-stamped, computer-generated | sealed result records, hash-chained | retention store, review process |
+| Audit trail not alterable | tamper-evident chain + `verify` | WORM storage, access control |
+| Access / authority checks (Annex 11 §12) | policy allowlists; command schema | broker auth + ACL, mTLS, RBAC |
+| Electronic records retained & retrievable | JSONL journal, `verify`, export | retention period, backup |
+| Electronic signatures (Part 11 Subpart C) | envelope prepared for Ed25519 (v0.3) | signature policy, key mgmt |
+| Data integrity & time | JCS hashes, ISO 8601, `time_source` | NTP; optional RFC 3161 TSA |
+
+*Indicative only — not a gap assessment. Map against your own SOPs.*
+
+## GAMP 5 / CSV
+
+TrailTransfer is small, deterministic and testable (see `go test ./...` and
+`docs/EVIDENCE_MODEL.md`). For validation: treat it as configurable software,
+trace your **user requirements** to the policy + MQTT contract + evidence model,
+and use `verify` and the example commands as **OQ** evidence. `policy_version` /
+`policy_hash` and `worker_version` in every record support change control.
+
+## Standards referenced
+
+ALCOA++ (WHO/PIC-S/MHRA/FDA data integrity) · EU GMP Annex 11 · 21 CFR Part 11 ·
+GAMP 5 · ISO 8601 · ISO/IEC 27001:2022 (8.15 logging, 8.16 monitoring, 8.17 clock
+sync) · ISO/IEC 27037 (chain of custody) · ISO/IEC 27040 (WORM/storage security)
+· NIST SP 800-92 (log mgmt), 800-57 (key mgmt) · RFC 8785 (JCS), RFC 6962
+(chained/Merkle logs), RFC 3161 (trusted timestamps), RFC 8032 (Ed25519) · JSON
+Schema 2020-12.
+
+## Shared responsibility (summary)
+
+**TrailTransfer provides:** canonical hashing, hash-chained tamper-evident
+records, append-only journal, independent `verify`, policy enforcement + policy
+hash, structured/versioned events, JSON Schemas.
+
+**The operator provides:** NTP time sync; broker authentication, ACLs and TLS/mTLS;
+a WORM/immutable retention store and retention/disposal policy; backups; key
+management (for signatures); and the **validation** of the deployed system against
+their own regulated process.

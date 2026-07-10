@@ -13,6 +13,7 @@ import (
 	"github.com/RainerGewalt/trailtransfer/internal/commands"
 	"github.com/RainerGewalt/trailtransfer/internal/config"
 	"github.com/RainerGewalt/trailtransfer/internal/events"
+	"github.com/RainerGewalt/trailtransfer/internal/evidence"
 	"github.com/RainerGewalt/trailtransfer/internal/policy"
 	"github.com/RainerGewalt/trailtransfer/internal/rclone"
 )
@@ -94,38 +95,56 @@ func newTestManager(runner Runner) (*Manager, *recorder) {
 		DryRunDefault:   true,
 	}
 	rec := &recorder{}
-	pub := events.NewPublisher(rec, cfg, "test")
+	sealer, _ := evidence.NewSealer(cfg.WorkerID, "") // in-memory chain for tests
+	pub := events.NewPublisher(rec, cfg, "test", sealer)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewManager(pol, pub, runner, log), rec
+}
+
+// payloadOf extracts the domain payload from a sealed result envelope.
+func payloadOf(t *testing.T, env map[string]any) map[string]any {
+	t.Helper()
+	p, ok := env["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("result envelope has no payload object: %v", env)
+	}
+	return p
 }
 
 func TestHandleCompletesValidCopy(t *testing.T) {
 	m, rec := newTestManager(fakeRunner{out: rclone.Outcome{FilesTotal: 1, FilesTransferred: 1, BytesTransferred: 100}})
 	m.Handle([]byte(`{"job_id":"job-001","action":"copy","source":"/data/input","target":"minio-demo:trailtransfer"}`))
 
-	res := rec.waitResult(t, "job-001")
-	if res["status"] != "completed" {
-		t.Fatalf("expected completed, got %v", res["status"])
+	env := rec.waitResult(t, "job-001")
+	if env["event_type"] != "result" {
+		t.Fatalf("expected result envelope, got %v", env["event_type"])
 	}
-	if !strings.HasPrefix(res["command_hash"].(string), "sha256:") {
-		t.Fatalf("missing command_hash: %v", res["command_hash"])
+	if env["seq"].(float64) != 1 || env["prev_hash"] != evidence.GenesisHash {
+		t.Fatalf("first record must be seq 1 off genesis: %+v", env)
 	}
-	if !strings.HasPrefix(res["result_hash"].(string), "sha256:") {
-		t.Fatalf("missing result_hash: %v", res["result_hash"])
+	if !strings.HasPrefix(env["content_hash"].(string), "sha256:") || !strings.HasPrefix(env["chain_hash"].(string), "sha256:") {
+		t.Fatalf("missing chain hashes: %+v", env)
 	}
-	if res["policy_version"] != "1" || res["worker_version"] != "test" {
-		t.Fatalf("evidence fields wrong: %+v", res)
+	p := payloadOf(t, env)
+	if p["status"] != "completed" {
+		t.Fatalf("expected completed, got %v", p["status"])
+	}
+	if !strings.HasPrefix(p["command_hash"].(string), "sha256:") {
+		t.Fatalf("missing command_hash: %v", p["command_hash"])
+	}
+	if p["policy_version"] != "1" || p["worker_version"] != "test" {
+		t.Fatalf("evidence fields wrong: %+v", p)
 	}
 }
 
 func TestHandleRejectsDisallowedSource(t *testing.T) {
 	m, rec := newTestManager(fakeRunner{})
 	m.Handle([]byte(`{"job_id":"job-002","action":"copy","source":"/etc","target":"minio-demo:trailtransfer"}`))
-	res := rec.waitResult(t, "job-002")
-	if res["status"] != "rejected" || res["reason"] != "policy_violation" {
-		t.Fatalf("expected policy rejection, got %+v", res)
+	p := payloadOf(t, rec.waitResult(t, "job-002"))
+	if p["status"] != "rejected" || p["reason"] != "policy_violation" {
+		t.Fatalf("expected policy rejection, got %+v", p)
 	}
-	if _, ran := res["rclone_exit_code"]; ran {
+	if _, ran := p["rclone_exit_code"]; ran {
 		t.Fatal("rejected job must not have run rclone")
 	}
 }
@@ -133,9 +152,9 @@ func TestHandleRejectsDisallowedSource(t *testing.T) {
 func TestHandleRejectsFailedExit(t *testing.T) {
 	m, rec := newTestManager(fakeRunner{out: rclone.Outcome{ExitCode: 1, Errors: []string{"boom"}}})
 	m.Handle([]byte(`{"job_id":"job-003","action":"copy","source":"/data/input","target":"minio-demo:trailtransfer"}`))
-	res := rec.waitResult(t, "job-003")
-	if res["status"] != "failed" {
-		t.Fatalf("nonzero rclone exit must fail the job, got %v", res["status"])
+	p := payloadOf(t, rec.waitResult(t, "job-003"))
+	if p["status"] != "failed" {
+		t.Fatalf("nonzero rclone exit must fail the job, got %v", p["status"])
 	}
 }
 
@@ -165,7 +184,12 @@ func TestHandleDedupesJobID(t *testing.T) {
 		var last map[string]any
 		for _, msg := range rec.msgs {
 			if strings.HasSuffix(msg.topic, "jobs/job-001/result") {
-				_ = json.Unmarshal(msg.payload, &last)
+				var env map[string]any
+				if json.Unmarshal(msg.payload, &env) == nil {
+					if p, ok := env["payload"].(map[string]any); ok {
+						last = p
+					}
+				}
 			}
 		}
 		rec.mu.Unlock()
