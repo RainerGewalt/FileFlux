@@ -1,0 +1,5 @@
+{
+  "job_id": "cancel-001",
+  "action": "cancel",
+  "target_job_id": "job-001"
+}

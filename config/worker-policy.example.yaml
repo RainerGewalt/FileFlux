@@ -1,0 +1,35 @@
+# TrailTransfer worker policy — the security boundary.
+# MQTT commands are untrusted input; this file is authoritative. Keep it in
+# version control and bump policy_version on every change. Its SHA-256
+# (policy_hash) is stamped into every result event for audit.
+worker_id: worker-01
+policy_version: "1"
+
+# Only these actions are executable. Anything else is rejected. Note: sync is
+# additionally gated by allow_sync_delete below (it can delete on the target).
+allowed_actions:
+  - copy
+  - move
+  - sync
+  - check
+
+# Reads are only permitted from these roots (prefix match, no '..').
+allowed_sources:
+  - /data/input
+  - /data/reports
+
+# Writes are only permitted to these rclone remotes/paths (aliases resolve to
+# rclone.conf, where the credentials live — never here).
+allowed_targets:
+  - sftp-demo:/upload
+  - minio-demo:trailtransfer
+
+max_file_size_mb: 500
+max_parallel_jobs: 2
+
+allow_delete: false              # delete/purge actions
+allow_sync_delete: false         # let sync delete on the target side
+allow_absolute_targets: false    # absolute local target paths
+allow_broadcast_commands: false  # trailtransfer/all/commands — off by design
+dry_run_default: true            # commands without a dry_run field run as a trial
+require_job_id: true

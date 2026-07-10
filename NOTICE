@@ -1,0 +1,16 @@
+TrailTransfer
+Copyright 2026 The TrailTransfer Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------------
+Third-party software
+
+TrailTransfer invokes rclone (https://rclone.org) as a separate subprocess at
+runtime. rclone is licensed under the MIT License and is NOT a derived work of,
+nor statically linked into, TrailTransfer. When distributed as a container
+image, the rclone binary is included under its own MIT License.
+
+Go module dependencies (see go.mod) retain their respective licenses:
+  - github.com/eclipse/paho.mqtt.golang  — Eclipse Public License 2.0 / EDL 1.0
+  - gopkg.in/yaml.v3                      — MIT / Apache-2.0

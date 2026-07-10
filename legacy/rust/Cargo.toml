@@ -1,0 +1,23 @@
+[package]
+name = "trailtransfer"
+version = "0.1.0"
+edition = "2021"
+description = "MQTT-controlled rclone worker for audit-ready edge file transfers"
+
+[dependencies]
+serde = { version = "1.0.215", features = ["derive"] }
+thiserror = "2.0.3"
+dotenvy = "0.15"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+log = "0.4.22"
+
+rumqttc = "0.24.0"
+uuid = { version = "1.11.0", features = ["v4"] }
+serde_json = "1.0.133"
+time = "0.3.36"
+
+[[bin]]
+name = "trailtransfer"
+path = "src/main.rs"

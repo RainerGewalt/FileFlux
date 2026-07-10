@@ -1,0 +1,20 @@
+# Example rclone config. In production this file is OPERATOR-PROVIDED and mounted
+# read-only at /config/rclone.conf — TrailTransfer never generates it and never
+# logs it. Remotes are referenced from the policy only by alias (e.g. sftp-demo:).
+#
+# Obscure real SFTP passwords with:  rclone obscure 'your-password'
+# The values below are throwaway demo credentials for the docker-compose stack.
+
+[minio-demo]
+type = s3
+provider = Minio
+access_key_id = minio
+secret_access_key = minio12345
+endpoint = http://minio:9000
+force_path_style = true
+
+[sftp-demo]
+type = sftp
+host = sftp
+user = demo
+# pass = <output of: rclone obscure your-password>

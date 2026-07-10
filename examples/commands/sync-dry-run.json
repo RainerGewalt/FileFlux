@@ -1,0 +1,7 @@
+{
+  "job_id": "job-014",
+  "action": "sync",
+  "source": "/data/reports",
+  "target": "minio-demo:trailtransfer/reports",
+  "dry_run": true
+}

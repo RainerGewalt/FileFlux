@@ -1,0 +1,20 @@
+# Optional YAML config. Every field can be overridden by a TRAILTRANSFER_* env
+# var (see .env.example). The docker-compose demo uses env only; this file shows
+# the equivalent file-based form: trailtransfer run --config /config/config.yaml
+worker_id: worker-01
+topic_prefix: trailtransfer
+
+mqtt:
+  host: mqtt
+  port: 1883
+  username: ""
+  password: ""
+  keep_alive_seconds: 30
+
+policy_file: /config/worker-policy.yaml
+rclone_config: /config/rclone.conf
+rclone_binary: rclone
+
+max_parallel_jobs: 2
+health_interval_seconds: 30
+log_level: info

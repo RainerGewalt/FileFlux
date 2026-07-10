@@ -1,0 +1,9 @@
+{
+  "job_id": "job-001",
+  "action": "copy",
+  "source": "/data/input",
+  "target": "minio-demo:trailtransfer",
+  "recursive": true,
+  "filters": ["*.jpg", "*.png"],
+  "dry_run": false
+}
