@@ -34,6 +34,10 @@ type Config struct {
 	// recoverable evidence.
 	EvidenceJournal string `yaml:"evidence_journal"`
 
+	// SigningKey is a PEM Ed25519 private key path. When set, every sealed record
+	// is signed (non-repudiation). Empty = unsigned chain.
+	SigningKey string `yaml:"signing_key"`
+
 	MaxParallelJobs       int    `yaml:"max_parallel_jobs"`
 	HealthIntervalSeconds int    `yaml:"health_interval_seconds"`
 	LogLevel              string `yaml:"log_level"`
@@ -86,6 +90,7 @@ func (c *Config) applyEnv() {
 	setStr(&c.RcloneConfig, "TRAILTRANSFER_RCLONE_CONFIG")
 	setStr(&c.RcloneBinary, "TRAILTRANSFER_RCLONE_BINARY")
 	setStr(&c.EvidenceJournal, "TRAILTRANSFER_EVIDENCE_JOURNAL")
+	setStr(&c.SigningKey, "TRAILTRANSFER_SIGNING_KEY")
 	setInt(&c.MaxParallelJobs, "TRAILTRANSFER_MAX_PARALLEL_JOBS")
 	setInt(&c.HealthIntervalSeconds, "TRAILTRANSFER_HEALTH_INTERVAL_SECONDS")
 	setStr(&c.LogLevel, "TRAILTRANSFER_LOG_LEVEL")

@@ -155,7 +155,8 @@ Job lifecycle: `received → rejected` (schema/policy) **or**
 trailtransfer run [--config config.yaml]     # start the worker
 trailtransfer validate-config [--config …]   # load config+policy, exit 0/1
 trailtransfer print-capabilities [--config …]# print the capabilities JSON
-trailtransfer verify <journal>               # independently verify the evidence chain, exit 0/1
+trailtransfer verify <journal>               # independently verify the evidence chain (--pubkey to check signatures)
+trailtransfer keygen [--out name]            # generate an Ed25519 signing key pair
 trailtransfer version
 ```
 
@@ -201,8 +202,9 @@ go test ./...
 - **v0.2** — audit evidence: RFC 8785 (JCS) hashing, sealed envelope with
   `seq`/`prev_hash` **hash chain**, append-only journal, `trailtransfer verify`,
   issuer/justification capture, JSON Schemas. *(this)*
-- **v0.3** — Ed25519 signatures, RFC 3161 timestamps, file manifest, WORM export,
-  live progress, retries.
+- **v0.3** — **Ed25519 signatures** (`keygen`, `verify --pubkey`) for
+  non-repudiation. *(this)*
+- **next** — RFC 3161 timestamps, file manifest, WORM export, live progress, retries.
 - **v1.0** — stable schemas, hardened image, full CI, deployment/validation guide.
 
 ## License

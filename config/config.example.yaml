@@ -17,6 +17,8 @@ rclone_binary: rclone
 
 # Append-only evidence journal (JSONL). Empty = in-memory chain only.
 evidence_journal: /data/evidence/journal.jsonl
+# Optional PEM Ed25519 private key to sign records (trailtransfer keygen).
+# signing_key: /config/worker-01.key
 
 max_parallel_jobs: 2
 health_interval_seconds: 30

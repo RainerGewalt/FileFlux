@@ -27,7 +27,7 @@ func sealN(t *testing.T, path string, n int) {
 func TestSealAndVerifyIntact(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "journal.jsonl")
 	sealN(t, path, 3)
-	rep, err := Verify(path)
+	rep, err := Verify(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestVerifyDetectsPayloadTamper(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	os.WriteFile(path, bytes.Replace(data, []byte(`"amount":1`), []byte(`"amount":9`), 1), 0o600)
 
-	rep, _ := Verify(path)
+	rep, _ := Verify(path, nil)
 	if rep.OK {
 		t.Fatal("verify must detect payload tampering")
 	}
@@ -61,7 +61,7 @@ func TestVerifyDetectsDeletion(t *testing.T) {
 	kept := append([][]byte{lines[0]}, lines[2]) // drop the middle record
 	os.WriteFile(path, bytes.Join(kept, []byte("\n")), 0o600)
 
-	rep, _ := Verify(path)
+	rep, _ := Verify(path, nil)
 	if rep.OK {
 		t.Fatal("verify must detect a removed record")
 	}
@@ -82,7 +82,7 @@ func TestSealerRecoversChainAcrossRestart(t *testing.T) {
 	if e.Seq != 2 {
 		t.Fatalf("expected seq 2 after recovery, got %d", e.Seq)
 	}
-	if rep, _ := Verify(path); !rep.OK || rep.Entries != 2 {
+	if rep, _ := Verify(path, nil); !rep.OK || rep.Entries != 2 {
 		t.Fatalf("chain broken after recovery: %+v", rep)
 	}
 }

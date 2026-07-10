@@ -98,6 +98,7 @@ type CapabilitiesEvent struct {
 	RcloneAvailable       bool     `json:"rclone_available"`
 	EvidenceSchemaVersion string   `json:"evidence_schema_version"`
 	EvidenceJournal       bool     `json:"evidence_journal"`
+	EvidenceSigned        bool     `json:"evidence_signed"`
 	PolicyVersion         string   `json:"policy_version"`
 	PolicyHash            string   `json:"policy_hash,omitempty"`
 	Timestamp             string   `json:"timestamp"`

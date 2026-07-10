@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,9 +10,11 @@ import (
 
 // VerifyReport is the outcome of checking an evidence journal.
 type VerifyReport struct {
-	Entries  int      // records checked
-	OK       bool     // whole chain intact
-	Failures []string // human-readable problems (first break stops the walk)
+	Entries           int      // records checked
+	OK                bool     // whole chain intact
+	Signed            bool     // at least one record carried a signature
+	SignaturesChecked int      // records whose signature was verified with pub
+	Failures          []string // human-readable problems (first break stops the walk)
 }
 
 // Verify independently re-checks an evidence journal: for each record it
@@ -19,11 +22,13 @@ type VerifyReport struct {
 // that prev_hash links to the previous record and that seq increments by one.
 // It needs nothing but the file — no broker, no TrailMQ, no keys.
 //
+// If pub is non-nil, each record's Ed25519 signature is verified against it.
+//
 // Note: an unsigned chain detects modification, deletion and reordering. An
 // actor who can rewrite the *entire* suffix of the journal can still forge a
-// consistent chain; to defend against that, enable signatures (v0.3) and/or
-// anchor the latest chain_hash in external immutable storage (WORM/TSA/TrailMQ).
-func Verify(journalPath string) (VerifyReport, error) {
+// consistent chain; signatures (pass pub) close that gap, as does anchoring the
+// latest chain_hash in external immutable storage (WORM/TSA/TrailMQ).
+func Verify(journalPath string, pub ed25519.PublicKey) (VerifyReport, error) {
 	data, err := os.ReadFile(journalPath)
 	if err != nil {
 		return VerifyReport{}, err
@@ -59,6 +64,16 @@ func Verify(journalPath string) (VerifyReport, error) {
 		if e.Seq != expectedSeq {
 			rep.fail(idx, fmt.Sprintf("seq gap — expected %d, got %d", expectedSeq, e.Seq))
 			break
+		}
+		if e.Signature != nil {
+			rep.Signed = true
+			if pub != nil {
+				if err := VerifySignature(pub, e.ChainHash, e.Signature); err != nil {
+					rep.fail(idx, "signature invalid: "+err.Error())
+					break
+				}
+				rep.SignaturesChecked++
+			}
 		}
 		prev = e.ChainHash
 		expectedSeq++

@@ -11,7 +11,7 @@
 
 | Principle | How TrailTransfer supports it |
 |---|---|
-| **Attributable** | `worker_id`, `command_hash`, and a self-declared `issuer` (command `operator`); strong identity via broker ACL/mTLS (operator) |
+| **Attributable** | `worker_id`, `command_hash`, self-declared `issuer` (command `operator`), and optional Ed25519 signature (`key_id`); strong identity via broker ACL/mTLS (operator) |
 | **Legible** | structured JSON, `schema_version`, published JSON Schemas (`schemas/`) |
 | **Contemporaneous** | `recorded_at` (ISO 8601 UTC) at seal time; `time_source` declared; NTP is operator responsibility (ISO 27001 8.17) |
 | **Original** | the sealed journal record is the original; hashes fix its content |
@@ -30,7 +30,7 @@
 | Audit trail not alterable | tamper-evident chain + `verify` | WORM storage, access control |
 | Access / authority checks (Annex 11 §12) | policy allowlists; command schema | broker auth + ACL, mTLS, RBAC |
 | Electronic records retained & retrievable | JSONL journal, `verify`, export | retention period, backup |
-| Electronic signatures (Part 11 Subpart C) | envelope prepared for Ed25519 (v0.3) | signature policy, key mgmt |
+| Electronic signatures (Part 11 Subpart C) | optional Ed25519 envelope signatures (`keygen`, `verify --pubkey`) | signature policy, key management/HSM |
 | Data integrity & time | JCS hashes, ISO 8601, `time_source` | NTP; optional RFC 3161 TSA |
 
 *Indicative only — not a gap assessment. Map against your own SOPs.*

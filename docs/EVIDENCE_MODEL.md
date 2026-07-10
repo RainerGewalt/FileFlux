@@ -35,7 +35,7 @@ removing, altering or reordering any record breaks the chain and is detected by
                   counters, command_hash, policy_version, policy_hash, … */ },
   "content_hash": "sha256:…",       // SHA-256 of JCS(payload)
   "chain_hash": "sha256:…",         // SHA-256 of JCS(envelope core incl. prev_hash)
-  "signature": null                  // optional, Ed25519 (v0.3)
+  "signature": { "alg": "ed25519", "key_id": "ed25519:…", "sig": "base64…" }
 }
 ```
 
@@ -71,6 +71,23 @@ trailtransfer verify /data/evidence/journal.jsonl
 `verify` recomputes every hash and checks the links. An auditor runs it against
 the file alone.
 
+## Signing (Ed25519, optional)
+
+Generate a key pair and run the worker with the private key; every record is
+then signed over its `chain_hash` (non-repudiation, and defeats a whole-suffix
+rewrite):
+
+```bash
+trailtransfer keygen --out worker-01           # writes worker-01.key / worker-01.pub
+TRAILTRANSFER_SIGNING_KEY=worker-01.key trailtransfer run --config config.yaml
+trailtransfer verify --pubkey worker-01.pub /data/evidence/journal.jsonl
+# OK: N record(s), hash chain intact, N signature(s) verified
+```
+
+Keep the private key on the worker (or an HSM/KMS in production) and distribute
+only the public key to reviewers. `key_id` is a short digest of the public key.
+The signature is over `chain_hash`, which already commits to the whole record.
+
 ## Attribution & time (honest limits)
 
 - **issuer** is *self-declared* via the command's `operator` field. MQTT 3.1.1
@@ -83,15 +100,16 @@ the file alone.
 
 ## Threat coverage & what closes the gaps
 
-| Threat | Detected by v0.2? | Note |
+| Threat | Detected? | Note |
 |---|---|---|
 | A record altered | ✅ | `content_hash` / `chain_hash` mismatch |
 | A record deleted / reordered | ✅ | `prev_hash` break, `seq` gap |
-| Whole-suffix rewrite by a journal-writer | ⚠️ not alone | close with **signatures** (v0.3) and/or **anchoring** the latest `chain_hash` to WORM / a TSA / TrailMQ |
-| Payload data integrity (which files) | partial | add optional **file manifest** (path, size, sha256) — v0.3 |
-| Non-repudiation of origin | ⚠️ | **Ed25519** envelope signature — v0.3 |
+| Whole-suffix rewrite by a journal-writer | ✅ *with signing* | forged records fail signature verification (attacker lacks the key); also anchor `chain_hash` to WORM/TSA/TrailMQ |
+| Non-repudiation of origin | ✅ *with signing* | **Ed25519** envelope signature |
+| Payload data integrity (which files) | partial | add optional **file manifest** (path, size, sha256) — planned |
 
 ## Roadmap
 
-- **v0.2 (this):** JCS, envelope, `seq`/`prev_hash` chain, journal, `verify`, issuer.
-- **v0.3:** Ed25519 signatures, RFC 3161 timestamps, file manifest, WORM export helper.
+- **v0.2:** JCS, envelope, `seq`/`prev_hash` chain, journal, `verify`, issuer.
+- **v0.3 (this):** **Ed25519 signatures** — `keygen`, `TRAILTRANSFER_SIGNING_KEY`, `verify --pubkey`.
+- **next:** RFC 3161 trusted timestamps, file manifest, WORM export helper.

@@ -23,6 +23,21 @@ type Sealer struct {
 	seq      uint64
 	lastHash string
 	journal  *os.File
+	signer   *Signer
+}
+
+// SetSigner enables Ed25519 signing of every sealed record.
+func (s *Sealer) SetSigner(signer *Signer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signer = signer
+}
+
+// Signed reports whether records are being signed.
+func (s *Sealer) Signed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.signer != nil
 }
 
 // NewSealer builds a sealer. If journalPath is non-empty the journal is opened
@@ -87,6 +102,14 @@ func (s *Sealer) Seal(eventType string, payload any, issuer *Issuer) (json.RawMe
 		return nil, err
 	}
 	env.ChainHash = ch
+
+	if s.signer != nil {
+		sig, err := s.signer.sign(env.ChainHash)
+		if err != nil {
+			return nil, err
+		}
+		env.Signature = sig
+	}
 
 	out, err := json.Marshal(env)
 	if err != nil {

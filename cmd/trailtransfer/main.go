@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -45,6 +46,8 @@ func main() {
 		cmdPrintCapabilities(os.Args[2:])
 	case "verify":
 		cmdVerify(os.Args[2:])
+	case "keygen":
+		cmdKeygen(os.Args[2:])
 	case "version":
 		fmt.Println(version.String())
 	case "-h", "--help", "help":
@@ -63,7 +66,8 @@ Commands:
   run                 start the worker
   validate-config     load config + policy, report validity, exit 0/1
   print-capabilities  print the capabilities event as JSON
-  verify <journal>    independently verify an evidence journal, exit 0/1
+  verify <journal>    independently verify an evidence journal (--pubkey to check signatures), exit 0/1
+  keygen [--out name] generate an Ed25519 signing key pair (<name>.key/.pub)
   version             print the worker version
 
 Flags (run/validate-config/print-capabilities):
@@ -99,6 +103,14 @@ func cmdRun(args []string) {
 	} else {
 		log.Warn("evidence journal disabled — hash chain is in-memory only; set TRAILTRANSFER_EVIDENCE_JOURNAL for durable, recoverable evidence")
 	}
+	if cfg.SigningKey != "" {
+		signer, err := evidence.LoadSigner(cfg.SigningKey)
+		if err != nil {
+			fatal(fmt.Errorf("signing key: %w", err))
+		}
+		sealer.SetSigner(signer)
+		log.Info("evidence signing enabled", "key_id", signer.ID())
+	}
 
 	lwt, _ := json.Marshal(events.HealthEvent{
 		EventType: events.TypeHealth,
@@ -126,6 +138,7 @@ func cmdRun(args []string) {
 		RcloneAvailable:       rclone.Available(cfg.RcloneBinary),
 		EvidenceSchemaVersion: evidence.SchemaVersion,
 		EvidenceJournal:       sealer.JournalEnabled(),
+		EvidenceSigned:        sealer.Signed(),
 		PolicyVersion:         pol.PolicyVersion,
 		PolicyHash:            pol.Hash,
 	}
@@ -188,6 +201,7 @@ func cmdPrintCapabilities(args []string) {
 		RcloneAvailable:       rclone.Available(cfg.RcloneBinary),
 		EvidenceSchemaVersion: evidence.SchemaVersion,
 		EvidenceJournal:       cfg.EvidenceJournal != "",
+		EvidenceSigned:        cfg.SigningKey != "",
 		PolicyVersion:         pol.PolicyVersion,
 		PolicyHash:            pol.Hash,
 		Timestamp:             time.Now().UTC().Format(time.RFC3339),
@@ -199,21 +213,40 @@ func cmdPrintCapabilities(args []string) {
 func cmdVerify(args []string) {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	journal := fs.String("journal", "", "path to the evidence journal (JSONL)")
+	pubkey := fs.String("pubkey", "", "PEM Ed25519 public key to verify record signatures")
 	_ = fs.Parse(args)
 	path := *journal
 	if path == "" && fs.NArg() > 0 {
 		path = fs.Arg(0)
 	}
 	if path == "" {
-		fmt.Fprintln(os.Stderr, "usage: trailtransfer verify <journal-path>")
+		fmt.Fprintln(os.Stderr, "usage: trailtransfer verify [--pubkey key.pub] <journal-path>")
 		os.Exit(2)
 	}
-	rep, err := evidence.Verify(path)
+
+	var pub ed25519.PublicKey
+	if *pubkey != "" {
+		p, err := evidence.LoadPublicKey(*pubkey)
+		if err != nil {
+			fatal(err)
+		}
+		pub = p
+	}
+
+	rep, err := evidence.Verify(path, pub)
 	if err != nil {
 		fatal(err)
 	}
 	if rep.OK {
-		fmt.Printf("OK: %d record(s), hash chain intact\n", rep.Entries)
+		fmt.Printf("OK: %d record(s), hash chain intact", rep.Entries)
+		switch {
+		case pub != nil:
+			fmt.Printf(", %d signature(s) verified\n", rep.SignaturesChecked)
+		case rep.Signed:
+			fmt.Print(", records are signed (pass --pubkey to verify signatures)\n")
+		default:
+			fmt.Println()
+		}
 		return
 	}
 	fmt.Printf("FAIL: %d record(s) checked\n", rep.Entries)
@@ -221,6 +254,24 @@ func cmdVerify(args []string) {
 		fmt.Println("  - " + f)
 	}
 	os.Exit(1)
+}
+
+func cmdKeygen(args []string) {
+	fs := flag.NewFlagSet("keygen", flag.ExitOnError)
+	out := fs.String("out", "trailtransfer", "output basename (writes <out>.key and <out>.pub)")
+	_ = fs.Parse(args)
+
+	priv, pub, keyID, err := evidence.GenerateKeyPair()
+	if err != nil {
+		fatal(err)
+	}
+	if err := os.WriteFile(*out+".key", priv, 0o600); err != nil {
+		fatal(err)
+	}
+	if err := os.WriteFile(*out+".pub", pub, 0o644); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("wrote %s.key (private, keep secret) and %s.pub\nkey_id: %s\n", *out, *out, keyID)
 }
 
 func parseConfigFlag(name string, args []string) string {
